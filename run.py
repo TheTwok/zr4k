@@ -169,7 +169,8 @@ def main():
     tunnel_needed = not is_https or is_local or is_tunnel
     
     # Check if running inside a container (Docker/K8s/etc.)
-    if os.path.exists('/.dockerenv') or os.getenv('K_SERVICE') or os.getenv('DOCKER_ENV') or os.getenv('PORT'):
+    # On Apply.Build and most clouds, the OS is Linux (sys.platform != "win32")
+    if sys.platform != "win32" or os.path.exists('/.dockerenv') or os.getenv('K_SERVICE') or os.getenv('DOCKER_ENV') or os.getenv('PORT'):
         print("🐳 Container/Cloud environment detected. Disabling automatic local tunnel.")
         tunnel_needed = False
         
