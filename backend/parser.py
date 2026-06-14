@@ -14,7 +14,6 @@ from telethon.tl.functions.folders import EditPeerFoldersRequest
 import redis.asyncio as aioredis
 from aiogram import Bot
 
-# Add parent directory to path so app packages can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.app.config import settings
@@ -23,26 +22,18 @@ from backend.app.models import User, Channel, UserChannel, Keyword, UserbotSessi
 from backend.app.crud import deactivate_userbot_session, save_caught_message
 from backend.app.matcher import evaluate_message
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("zr4k.parser")
 
-# Global dict of active Telethon clients: {session_id: TelegramClient}
 clients = {}
-# Mapping from channel_username (lowercase) to database Channel id: {username: channel_id}
 monitored_channels = {}
-# Mapping from resolved telegram_id (int) to database Channel id: {telegram_id: channel_id}
 monitored_peer_ids = {}
 
-# Client Bot instance for notifications
 bot = Bot(token=settings.telegram_bot_token)
 redis_client = None
 
 
 async def notify_admin(message: str):
-    """
-    Helper to send a system alert to the admin.
-    """
     if settings.admin_user_id:
         try:
             await bot.send_message(chat_id=settings.admin_user_id, text=f"🚨 **Системное уведомление:**\n{message}")
@@ -50,14 +41,10 @@ async def notify_admin(message: str):
             logger.error(f"Failed to send alert to admin: {str(e)}")
 
 async def handle_session_death(session_id: int, session_name: str, phone: str, error_msg: str):
-    """
-    Deactivates a dead session in DB and notifies admin.
-    """
     logger.error(f"Session '{session_name}' ({phone}) has died: {error_msg}")
     async with async_session() as db:
         await deactivate_userbot_session(db, session_name)
     
-    # Close client if running
     client = clients.pop(session_id, None)
     if client:
         try:
@@ -70,24 +57,18 @@ async def handle_session_death(session_id: int, session_name: str, phone: str, e
     )
 
 async def process_new_message(event, client_session_id: int):
-    """
-    Handles a new message event from Telethon.
-    """
     if not event.is_channel:
         return
 
-    chat_id = event.chat_id # e.g. -100123456789
+    chat_id = event.chat_id
     
-    # 1. Check if channel is monitored
     channel_id = monitored_peer_ids.get(chat_id)
     if not channel_id:
-        # Fallback to check by username if peer ID is not resolved yet
         chat = await event.get_chat()
         username = chat.username.lower() if getattr(chat, 'username', None) else None
         if username:
             channel_id = monitored_channels.get(username)
             if channel_id:
-                # Update peer ID in DB and cache
                 monitored_peer_ids[chat_id] = channel_id
                 async with async_session() as db:
                     stmt = select(Channel).where(Channel.id == channel_id)
@@ -105,21 +86,17 @@ async def process_new_message(event, client_session_id: int):
     if not message_text:
         return
 
-    # 2. De-duplication check in Redis
     global redis_client
     if redis_client is None:
         redis_client = aioredis.from_url(settings.redis_url)
     dup_key = f"zr4k:msg_dup:{channel_id}:{message_id}"
-    is_duplicate = await redis_client.set(dup_key, "1", ex=300, nx=True) # 5 minutes TTL
+    is_duplicate = await redis_client.set(dup_key, "1", ex=300, nx=True)
     if not is_duplicate:
-        # Already processed
         return
 
     logger.info(f"Processing message {message_id} from channel ID {channel_id}")
 
-    # 3. Retrieve active user channels and their keywords
     async with async_session() as db:
-        # Get users tracking this channel actively
         stmt = (
             select(UserChannel)
             .join(User, User.telegram_id == UserChannel.user_id)
@@ -132,17 +109,12 @@ async def process_new_message(event, client_session_id: int):
         user_channels = res.scalars().all()
 
         for uc in user_channels:
-            # Check user subscription status
             stmt_user = select(User).where(User.telegram_id == uc.user_id)
             res_user = await db.execute(stmt_user)
             user = res_user.scalar_one_or_none()
             if not user:
                 continue
 
-            # Free users are limited to 1 channel and 5 keywords. Pro users to 100/200.
-            # (Enforced at entry, but we can verify is_pro if needed)
-            
-            # Fetch user keywords for this channel
             stmt_kw = select(Keyword).where(
                 Keyword.user_id == uc.user_id,
                 Keyword.channel_id == channel_id
@@ -152,10 +124,7 @@ async def process_new_message(event, client_session_id: int):
             
             rules = [{"keyword": kw.keyword, "mode": kw.mode} for kw in kws]
             
-            # 4. Evaluate message against user's filters
             if evaluate_message(message_text, rules):
-                # Generate post URL
-                # Fetch channel info from cache or DB to form the URL
                 stmt_chan = select(Channel).where(Channel.id == channel_id)
                 res_chan = await db.execute(stmt_chan)
                 chan_obj = res_chan.scalar_one_or_none()
@@ -164,10 +133,8 @@ async def process_new_message(event, client_session_id: int):
                 if channel_username:
                     post_url = f"https://t.me/{channel_username}/{message_id}"
                 else:
-                    # Private channels or missing username link format
                     post_url = f"https://t.me/c/{str(chat_id)[4:]}/{message_id}"
                 
-                # Save caught message
                 await save_caught_message(
                     db,
                     user_id=uc.user_id,
@@ -177,7 +144,6 @@ async def process_new_message(event, client_session_id: int):
                     url=post_url
                 )
                 
-                # 5. Send real-time notification
                 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                 channel_title = chan_obj.title or channel_username or "Канал"
                 notification_text = (
@@ -201,9 +167,6 @@ async def process_new_message(event, client_session_id: int):
                     logger.error(f"Failed to send notification to user {uc.user_id}: {str(e)}")
 
 async def setup_client_handlers(client: TelegramClient, session_id: int):
-    """
-    Registers the message handler for a Telethon client.
-    """
     @client.on(events.NewMessage)
     async def msg_handler(event):
         try:
@@ -212,9 +175,6 @@ async def setup_client_handlers(client: TelegramClient, session_id: int):
             logger.error(f"Error in process_new_message: {str(e)}")
 
 async def run_client(session_id: int, phone: str, session_name: str, api_id: int, api_hash: str):
-    """
-    Starts and keeps running a single Telethon client.
-    """
     base_dir = os.path.dirname(os.path.abspath(__file__))
     session_path = os.path.join(base_dir, "sessions", session_name)
     
@@ -231,25 +191,19 @@ async def run_client(session_id: int, phone: str, session_name: str, api_id: int
             await handle_session_death(session_id, session_name, phone, "Session not authorized. Needs login.")
             return
 
-        # Setup message handler
         await setup_client_handlers(client, session_id)
         logger.info(f"Client for {session_name} handlers configured successfully.")
         
-        # Keep client running
         await client.run_until_disconnected()
 
     except (AuthKeyUnregisteredError, UserDeactivatedError, SessionExpiredError) as e:
         await handle_session_death(session_id, session_name, phone, f"Telethon authorization error: {str(e)}")
     except Exception as e:
         logger.error(f"Unexpected error in client loop for {session_name}: {str(e)}")
-        # Check if auth/network error is persistent
         if "auth" in str(e).lower() or "unregistered" in str(e).lower():
             await handle_session_death(session_id, session_name, phone, str(e))
 
 async def handle_control_action(data: dict):
-    """
-    Processes join/leave/fetch_history actions from the Redis queue.
-    """
     action = data.get("action")
 
     if action == "fetch_history":
@@ -296,7 +250,6 @@ async def handle_control_action(data: dict):
             for r_texts in results:
                 all_texts.extend(r_texts)
                 
-        # Send result back via Redis
         try:
             r = aioredis.from_url(settings.redis_url)
             await r.set(f"zr4k:rpc:res:{request_id}", json.dumps(all_texts), ex=60)
@@ -306,19 +259,16 @@ async def handle_control_action(data: dict):
             logger.error(f"Failed to return RPC result: {str(e)}")
         return
 
-    # Validations for join/leave
     username = data.get("username", "").lower()
     channel_id = data.get("channel_id")
 
     if not username or not channel_id:
         return
 
-    # Choose an active client
     if not clients:
         logger.error("No active userbots available to perform actions.")
         return
 
-    # For scaling, choose client with lowest channel count in DB
     async with async_session() as db:
         stmt = (
             select(UserbotSession.id, func.count(Channel.id))
@@ -343,11 +293,8 @@ async def handle_control_action(data: dict):
         logger.info(f"Action JOIN: {username} on session ID {target_session_id}")
         try:
             entity = await client.get_entity(username)
-            
-            # Join channel
             await client(JoinChannelRequest(entity))
             
-            # Try to mute channel (optional)
             try:
                 await client(UpdateNotifySettingsRequest(
                     peer=InputNotifyPeer(entity),
@@ -356,7 +303,6 @@ async def handle_control_action(data: dict):
             except Exception as e:
                 logger.warning(f"Failed to mute channel {username}: {str(e)}")
                 
-            # Try to archive channel (optional)
             try:
                 from telethon.tl.types import InputPeerChannel
                 peer_arg = InputPeerChannel(entity.id, entity.access_hash) if hasattr(entity, 'access_hash') else entity
@@ -366,13 +312,11 @@ async def handle_control_action(data: dict):
             except Exception as e:
                 logger.warning(f"Failed to archive channel {username}: {str(e)}")
             
-            # Fetch channel details
             full_chat = await client.get_entity(entity)
             title = getattr(full_chat, 'title', None)
             telegram_id = full_chat.id
             normalized_telegram_id = int(f"-100{telegram_id}")
             
-            # Update cache and database
             monitored_channels[username] = channel_id
             monitored_peer_ids[normalized_telegram_id] = channel_id
 
@@ -389,12 +333,9 @@ async def handle_control_action(data: dict):
             logger.info(f"Successfully joined and registered channel: {username}")
         except Exception as e:
             logger.error(f"Failed to join channel {username}: {str(e)}")
-            # If the channel is invalid or doesn't exist, we should mark it as inactive or handle it
-            # so the user sees an error (done via frontend/backend validation where possible).
 
     elif action == "leave":
         logger.info(f"Action LEAVE: {username}")
-        # Find which client holds this channel
         async with async_session() as db:
             stmt = select(Channel).where(Channel.id == channel_id)
             res = await db.execute(stmt)
@@ -414,12 +355,10 @@ async def handle_control_action(data: dict):
                 await client(LeaveChannelRequest(entity))
                 logger.info(f"Left channel: {username}")
                 
-                # Remove from cache
                 monitored_channels.pop(username, None)
                 if chan.telegram_id:
                     monitored_peer_ids.pop(chan.telegram_id, None)
 
-                # Reset session assignment in DB
                 chan.userbot_session_id = None
                 chan.telegram_id = None
                 await db.commit()
@@ -427,11 +366,7 @@ async def handle_control_action(data: dict):
                 logger.error(f"Failed to leave channel {username}: {str(e)}")
 
 async def sync_unassigned_channels():
-    """
-    Finds channels that have active subscribers but no userbot_session_id,
-    and tries to join them using an active client.
-    """
-    await asyncio.sleep(5) # Wait for clients to connect
+    await asyncio.sleep(5)
     logger.info("Starting sync for unassigned active channels...")
     
     async with async_session() as db:
@@ -461,9 +396,6 @@ async def sync_unassigned_channels():
             logger.error(f"Error during auto-join of {ch.username}: {str(e)}")
 
 async def listen_redis_control():
-    """
-    Subscribes to Redis control PubSub to handle dynamic joins/leaves.
-    """
     logger.info("Initializing Redis PubSub listener...")
     r = aioredis.from_url(settings.redis_url)
     pubsub = r.pubsub()
@@ -488,7 +420,6 @@ async def listen_redis_control():
 async def start_parser():
     logger.info("Starting ZR4K Parser Bot pool...")
     
-    # 1. Warm up channel cache
     async with async_session() as db:
         stmt_chan = select(Channel).where(Channel.userbot_session_id.isnot(None))
         res_chan = await db.execute(stmt_chan)
@@ -498,7 +429,6 @@ async def start_parser():
             if ch.telegram_id:
                 monitored_peer_ids[ch.telegram_id] = ch.id
                 
-        # Get active sessions
         stmt_sessions = select(UserbotSession).where(UserbotSession.is_active == True)
         res_sessions = await db.execute(stmt_sessions)
         active_sessions = res_sessions.scalars().all()
@@ -507,7 +437,6 @@ async def start_parser():
         logger.warning("No active userbot sessions found in database. Parser running but idle.")
         logger.info("To add a session, run: backend/login_userbot.py")
 
-    # 2. Launch each client in background
     tasks = []
     for sess in active_sessions:
         task = asyncio.create_task(
@@ -521,21 +450,17 @@ async def start_parser():
         )
         tasks.append(task)
 
-    # 3. Launch Redis control listener
     control_task = asyncio.create_task(listen_redis_control())
     tasks.append(control_task)
 
-    # 4. Launch unassigned channels sync
     sync_task = asyncio.create_task(sync_unassigned_channels())
     tasks.append(sync_task)
 
-    # Keep running
     try:
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         logger.info("Parser Bot shutting down...")
     finally:
-        # Close bot session
         await bot.session.close()
         global redis_client
         if redis_client:
