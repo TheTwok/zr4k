@@ -1,4 +1,6 @@
 import json
+import os
+from pathlib import Path
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, status
@@ -24,27 +26,42 @@ bot = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client, bot
-    # Проверяем и создаем БД zr4k, если она отсутствует
-    await ensure_db_exists()
-    # 1. Initialize Database Tables
-    import os
-from pathlib import Path
-
-# Определяем путь к базе из переменной окружения
-db_url = os.getenv("DATABASE_URL", "")
-
-# Если используем SQLite, проверяем путь
-if "sqlite" in db_url:
-    # Извлекаем путь из URL (убираем префикс sqlite+aiosqlite:///)
-    path_str = db_url.split(":///")[-1]
-    db_path = Path(path_str)
     
-    # Создаем папку, если она не существует
-    if not db_path.parent.exists():
-        print(f"Creating directory: {db_path.parent}")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+    # 1. Гарантированно создаем папку для данных
+    os.makedirs("/app/data", exist_ok=True)
+    
+    # 2. Проверяем БД
+    await ensure_db_exists()
+    
+    # 3. Создаем таблицы
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+    # 4. Seed admin user
+    if settings.admin_user_id:
+        async with async_session() as session:
+            stmt = select(User).where(User.telegram_id == settings.admin_user_id)
+            res = await session.execute(stmt)
+            admin_user = res.scalar_one_or_none()
+            if not admin_user:
+                admin_user = User(
+                    telegram_id=settings.admin_user_id,
+                    username="admin",
+                    language_code="ru",
+                    is_admin=True,
+                    timezone="Europe/Moscow"
+                )
+                session.add(admin_user)
+                await session.commit()
+    
+    # 5. Redis и Bot
+    redis_client = aioredis.from_url(settings.redis_url)
+    bot = Bot(token=settings.telegram_bot_token)
+    
+    yield
+    
+    await redis_client.aclose()
+    await bot.session.close()
         
     # Seed admin user if configured
     if settings.admin_user_id:
