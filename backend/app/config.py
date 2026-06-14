@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     app_url: str = Field(default=os.getenv("APP_URL", "http://localhost:8000"))
     debug: bool = Field(default=True)
 
-    # DB & Redis URIs (Принудительное чтение из Apply.Build и Supabase)
+    # DB & Redis URIs
     database_url: str = Field(default=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///zr4k.db"))
     redis_url: str = Field(default=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 
@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     admin_user_id: int = Field(default=int(os.getenv("ADMIN_USER_ID", "0")))
 
 settings = Settings()
+
+# Защита от кривого копирования: срезаем случайные кавычки и пробелы из URL
+if settings.redis_url:
+    settings.redis_url = settings.redis_url.strip("'\" ")
 
 # Dynamic SQLite relative path resolver
 if settings.database_url.startswith("sqlite"):
