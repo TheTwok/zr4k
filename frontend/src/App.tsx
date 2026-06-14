@@ -1662,7 +1662,7 @@ export default function App() {
                               flexDirection: 'column',
                               gap: 10
                             }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyCONtent: 'space-between' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.03em' }}>
                                     {p.toUpperCase()}
