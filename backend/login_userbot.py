@@ -4,6 +4,11 @@ import asyncio
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # Add parent directory to path so app packages can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -30,7 +35,7 @@ async def main():
         print("❌ Error: Please specify valid TELEGRAM_API_ID and TELEGRAM_API_HASH in your backend/.env file.")
         return
         
-    phone = input("📞 Enter userbot phone number (e.g. +79001234567): ").strip()
+    phone = input("Enter userbot phone number (e.g. +79001234567): ").strip()
     if not phone:
         print("❌ Error: Phone number is required.")
         return
@@ -74,7 +79,7 @@ async def main():
                     await qr_login.wait()
                     print("✅ Успешный вход через QR-код!")
                 except SessionPasswordNeededError:
-                    password = input("🔒 Включена двухфакторная аутентификация (2FA). Введите ваш пароль: ").strip()
+                    password = input("Включена двухфакторная аутентификация (2FA). Введите ваш пароль: ").strip()
                     try:
                         await client.sign_in(password=password)
                         print("✅ Успешный вход с использованием 2FA!")
@@ -95,11 +100,11 @@ async def main():
                 await client.disconnect()
                 return
                 
-            code = input("🔑 Введите код подтверждения, полученный в Telegram: ").strip()
+            code = input("Введите код подтверждения, полученный в Telegram: ").strip()
             try:
                 await client.sign_in(phone, code)
             except SessionPasswordNeededError:
-                password = input("🔒 Включена двухфакторная аутентификация (2FA). Введите ваш пароль: ").strip()
+                password = input("Включена двухфакторная аутентификация (2FA). Введите ваш пароль: ").strip()
                 try:
                     await client.sign_in(password=password)
                 except Exception as e:
