@@ -2,6 +2,8 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+
 def get_env_int(key, default=0):
     val = os.getenv(key)
     if not val:
@@ -12,17 +14,38 @@ def get_env_int(key, default=0):
     except ValueError:
         return default
 
+def clean_env_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip("'\" \t\r\n")
+    return value or None
+
+def normalize_public_url(value: str | None) -> str | None:
+    value = clean_env_value(value)
+    if not value:
+        return None
+    if value.startswith(("http://", "https://")):
+        return value.rstrip("/")
+    return f"https://{value.rstrip('/')}"
+
+def looks_like_public_host(value: str | None) -> bool:
+    value = clean_env_value(value)
+    if not value:
+        return False
+    host = value.replace("https://", "").replace("http://", "").split("/", 1)[0].split(":", 1)[0]
+    if host in LOCAL_HOSTS:
+        return False
+    return "." in host
+
 def get_fallback_app_url():
-    url = os.getenv("APP_URL")
+    url = normalize_public_url(os.getenv("APP_URL"))
     if url:
         return url
     
-    domain = os.getenv("DOMAIN")
-    if domain:
-        domain = domain.strip("'\" ")
-        if not domain.startswith("http"):
-            return f"https://{domain}"
-        return domain.rstrip("/")
+    for key in ("DOMAIN", "BOTHOST_DOMAIN", "PUBLIC_DOMAIN", "APP_DOMAIN", "APP_HOST", "WEBSITE_HOSTNAME"):
+        domain = os.getenv(key)
+        if looks_like_public_host(domain):
+            return normalize_public_url(domain)
         
     return "http://localhost:8000"
 
@@ -59,16 +82,16 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Force APP_URL to use Bothost domain if DOMAIN env var is set (ignores incorrect values from local .env)
-domain = os.getenv("DOMAIN")
-if domain:
-    domain = domain.strip("'\" ")
-    if domain:
-        if not domain.startswith("http"):
-            settings.app_url = f"https://{domain}"
-        else:
-            settings.app_url = domain.rstrip("/")
-        print(f"🌐 Running on Bothost. Forcing APP_URL to: {settings.app_url}")
+# Prefer hosting-provided public domains over any APP_URL accidentally copied
+# from a local tunnel .env file.
+for domain_key in ("DOMAIN", "BOTHOST_DOMAIN", "PUBLIC_DOMAIN", "APP_DOMAIN", "APP_HOST", "WEBSITE_HOSTNAME"):
+    domain = os.getenv(domain_key)
+    if looks_like_public_host(domain):
+        settings.app_url = normalize_public_url(domain)
+        print(f"Public app URL from {domain_key}: {settings.app_url}")
+        break
+else:
+    settings.app_url = normalize_public_url(settings.app_url) or "http://localhost:8000"
 
 # Force persistent SQLite path inside /app/data on Bothost
 if os.path.exists("/app/data"):

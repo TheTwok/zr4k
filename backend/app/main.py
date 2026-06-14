@@ -155,6 +155,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/api/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "app_url": settings.app_url,
+        "database": "sqlite" if settings.database_url.startswith("sqlite") else "postgres",
+        "bot_configured": client_bot is not None,
+        "frontend_dist": os.path.exists(frontend_dist),
+    }
+
 # ----------------- User & Settings Endpoints -----------------
 
 @app.get("/api/user/me")

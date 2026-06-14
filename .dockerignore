@@ -1,0 +1,25 @@
+.git
+.gitignore
+.pytest_cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Local secrets and runtime state must never be baked into the deploy image.
+backend/.env
+backend/zr4k.db
+backend/sessions/
+*.session
+*.session-journal
+
+# Local frontend artifacts are rebuilt inside Docker.
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+
+# Local tunnel/download artifacts.
+backend/cloudflared.exe
+ngrok.zip
+cert.der

@@ -2,6 +2,17 @@ import os
 import sys
 import uvicorn
 
+def get_port() -> int:
+    for key in ("PORT", "APP_PORT", "WEB_PORT", "BOTHOST_PORT"):
+        value = os.getenv(key)
+        if not value:
+            continue
+        try:
+            return int(value.strip("'\" "))
+        except ValueError:
+            print(f"Ignoring invalid {key} value: {value!r}")
+    return 8000
+
 class Tee:
     def __init__(self, filename, stream):
         self.file = open(filename, "a", encoding="utf-8", buffering=1)
@@ -95,6 +106,6 @@ if __name__ == "__main__":
             else:
                 print(f"🔑 No .session files found in shared storage.")
 
-    port = int(os.getenv("PORT", "8000"))
+    port = get_port()
     print(f"🚀 Starting Uvicorn server on http://0.0.0.0:{port}...")
     uvicorn.run("backend.app.main:app", host="0.0.0.0", port=port)
