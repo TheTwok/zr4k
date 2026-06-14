@@ -27,6 +27,22 @@ async def lifespan(app: FastAPI):
     # Проверяем и создаем БД zr4k, если она отсутствует
     await ensure_db_exists()
     # 1. Initialize Database Tables
+    import os
+from pathlib import Path
+
+# Определяем путь к базе из переменной окружения
+db_url = os.getenv("DATABASE_URL", "")
+
+# Если используем SQLite, проверяем путь
+if "sqlite" in db_url:
+    # Извлекаем путь из URL (убираем префикс sqlite+aiosqlite:///)
+    path_str = db_url.split(":///")[-1]
+    db_path = Path(path_str)
+    
+    # Создаем папку, если она не существует
+    if not db_path.parent.exists():
+        print(f"Creating directory: {db_path.parent}")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         
