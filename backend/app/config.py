@@ -2,6 +2,30 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
+def get_env_int(key, default=0):
+    val = os.getenv(key)
+    if not val:
+        return default
+    try:
+        val = val.strip("'\" ")
+        return int(val)
+    except ValueError:
+        return default
+
+def get_fallback_app_url():
+    url = os.getenv("APP_URL")
+    if url:
+        return url
+    
+    domain = os.getenv("DOMAIN")
+    if domain:
+        domain = domain.strip("'\" ")
+        if not domain.startswith("http"):
+            return f"https://{domain}"
+        return domain.rstrip("/")
+        
+    return "http://localhost:8000"
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file="backend/.env", 
@@ -11,7 +35,7 @@ class Settings(BaseSettings):
 
     # JWT signing key for frontend token generation
     jwt_secret: str = Field(default="zr4k_secret_jwt_sign_key_928341")
-    app_url: str = Field(default=os.getenv("APP_URL", "http://localhost:8000"))
+    app_url: str = Field(default=get_fallback_app_url())
     debug: bool = Field(default=True)
 
     # DB & Redis URIs
@@ -22,7 +46,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default=os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE"))
 
     # MTProto credentials
-    telegram_api_id: int = Field(default=int(os.getenv("TELEGRAM_API_ID", "0")))
+    telegram_api_id: int = Field(default=get_env_int("TELEGRAM_API_ID", 0))
     telegram_api_hash: str = Field(default=os.getenv("TELEGRAM_API_HASH", "YOUR_API_HASH_HERE"))
 
     # Groq, Mistral and Gemini keys
@@ -31,9 +55,14 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default=os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE"))
 
     # Admin's Telegram ID to send alerts to
-    admin_user_id: int = Field(default=int(os.getenv("ADMIN_USER_ID", "0")))
+    admin_user_id: int = Field(default=get_env_int("ADMIN_USER_ID", 0))
 
 settings = Settings()
+
+# Force persistent SQLite path inside /app/data on Bothost
+if os.path.exists("/app/data"):
+    if settings.database_url.startswith("sqlite"):
+        settings.database_url = "sqlite+aiosqlite:////app/data/zr4k.db"
 
 # Защита от кривого копирования: срезаем случайные кавычки и пробелы из URL
 if settings.redis_url:

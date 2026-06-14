@@ -18,8 +18,17 @@ from backend.app.models import User, Payment
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("zr4k.bot")
 
-# Initialize Bot and Dispatcher
-bot = Bot(token=settings.telegram_bot_token)
+# Initialize Bot and Dispatcher safely
+bot = None
+token = settings.telegram_bot_token
+if not token or token == "YOUR_BOT_TOKEN_HERE" or ":" not in token:
+    logger.error("❌ TELEGRAM_BOT_TOKEN is missing or invalid! Bot features will be disabled.")
+else:
+    try:
+        bot = Bot(token=token)
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Telegram Bot: {e}")
+
 dp = Dispatcher()
 
 # Price of PRO tariff in Telegram Stars (XTR)
@@ -182,6 +191,9 @@ async def process_successful_payment(message: Message):
 
 async def main():
     logger.info("Starting ZR4K Client Bot...")
+    if bot is None:
+        logger.error("❌ Bot is not initialized (invalid token). Cannot run main polling loop.")
+        return
     # Delete webhook if set and start polling
     await bot.delete_webhook(drop_pending_updates=True)
     

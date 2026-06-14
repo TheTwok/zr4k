@@ -29,12 +29,18 @@ clients = {}
 monitored_channels = {}
 monitored_peer_ids = {}
 
-bot = Bot(token=settings.telegram_bot_token)
+bot = None
+token = settings.telegram_bot_token
+if token and token != "YOUR_BOT_TOKEN_HERE" and ":" in token:
+    try:
+        bot = Bot(token=token)
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Bot in parser: {e}")
 redis_client = None
 
 
 async def notify_admin(message: str):
-    if settings.admin_user_id:
+    if bot and settings.admin_user_id:
         try:
             await bot.send_message(chat_id=settings.admin_user_id, text=f"🚨 **Системное уведомление:**\n{message}")
         except Exception as e:
@@ -359,7 +365,6 @@ async def handle_control_action(data: dict):
                 logger.error(f"Failed to leave channel {username}: {str(e)}")
 
 async def sync_unassigned_channels():
-    await asyncio.sleep(5)
     logger.info("Starting sync for unassigned active channels...")
     
     async with async_session() as db:
@@ -391,45 +396,67 @@ async def sync_unassigned_channels():
 async def start_parser():
     logger.info("Starting ZR4K Parser Bot pool...")
     
-    async with async_session() as db:
-        stmt_chan = select(Channel).where(Channel.userbot_session_id.isnot(None))
-        res_chan = await db.execute(stmt_chan)
-        channels_db = res_chan.scalars().all()
-        for ch in channels_db:
-            monitored_channels[ch.username] = ch.id
-            if ch.telegram_id:
-                monitored_peer_ids[ch.telegram_id] = ch.id
-                
-        stmt_sessions = select(UserbotSession).where(UserbotSession.is_active == True)
-        res_sessions = await db.execute(stmt_sessions)
-        active_sessions = res_sessions.scalars().all()
-        
-    if not active_sessions:
-        logger.warning("No active userbot sessions found in database. Parser running but idle.")
-        logger.info("To add a session, run: backend/login_userbot.py")
-
-    tasks = []
-    for sess in active_sessions:
-        task = asyncio.create_task(
-            run_client(
-                session_id=sess.id,
-                phone=sess.phone,
-                session_name=sess.session_name,
-                api_id=settings.telegram_api_id,
-                api_hash=settings.telegram_api_hash
-            )
-        )
-        tasks.append(task)
-
-    sync_task = asyncio.create_task(sync_unassigned_channels())
-    tasks.append(sync_task)
-
     try:
-        await asyncio.gather(*tasks)
+        while True:
+            try:
+                async with async_session() as db:
+                    # 1. Update monitored channels mappings from DB
+                    stmt_chan = select(Channel).where(Channel.userbot_session_id.isnot(None))
+                    res_chan = await db.execute(stmt_chan)
+                    channels_db = res_chan.scalars().all()
+                    
+                    # Update local caches
+                    current_monitored_usernames = set()
+                    current_monitored_peer_ids = set()
+                    for ch in channels_db:
+                        monitored_channels[ch.username] = ch.id
+                        current_monitored_usernames.add(ch.username)
+                        if ch.telegram_id:
+                            monitored_peer_ids[ch.telegram_id] = ch.id
+                            current_monitored_peer_ids.add(ch.telegram_id)
+                            
+                    # Remove dead/deleted channels from local memory collections
+                    for username in list(monitored_channels.keys()):
+                        if username not in current_monitored_usernames:
+                            monitored_channels.pop(username, None)
+                    for peer_id in list(monitored_peer_ids.keys()):
+                        if peer_id not in current_monitored_peer_ids:
+                            monitored_peer_ids.pop(peer_id, None)
+                            
+                    # 2. Query active sessions from DB
+                    stmt_sessions = select(UserbotSession).where(UserbotSession.is_active == True)
+                    res_sessions = await db.execute(stmt_sessions)
+                    active_sessions = res_sessions.scalars().all()
+                    
+                # 3. Start client tasks for newly activated sessions
+                for sess in active_sessions:
+                    if sess.id not in clients:
+                        logger.info(f"Detected new active userbot session in DB: {sess.session_name}. Starting client...")
+                        # Spawn run_client in background as a task
+                        asyncio.create_task(
+                            run_client(
+                                session_id=sess.id,
+                                phone=sess.phone,
+                                session_name=sess.session_name,
+                                api_id=settings.telegram_api_id,
+                                api_hash=settings.telegram_api_hash
+                            )
+                        )
+                        
+                # 4. Sync and auto-join unassigned active channels
+                await sync_unassigned_channels()
+                
+            except Exception as e:
+                logger.error(f"Error in start_parser loop cycle: {e}")
+                
+            # Wait 30 seconds before next sync cycle
+            await asyncio.sleep(30)
+            
     except asyncio.CancelledError:
         logger.info("Parser Bot shutting down...")
     finally:
-        await bot.session.close()
+        if bot is not None:
+            await bot.session.close()
 
 if __name__ == "__main__":
     try:

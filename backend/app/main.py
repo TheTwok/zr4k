@@ -55,6 +55,9 @@ async def scheduler_loop():
         await asyncio.sleep(max(0.1, sleep_secs + 0.1))
 
 async def start_client_bot():
+    if client_bot is None:
+        logger.error("🤖 Bot is not initialized (invalid token). Skipping client bot startup.")
+        return
     try:
         # Delete webhook if set and start polling
         await client_bot.delete_webhook(drop_pending_updates=True)
@@ -138,7 +141,8 @@ async def lifespan(app: FastAPI):
         task.cancel()
     await asyncio.gather(*background_tasks, return_exceptions=True)
     background_tasks.clear()
-    await client_bot.session.close()
+    if client_bot is not None:
+        await client_bot.session.close()
 
 app = FastAPI(title="ZR4K API", version="1.0.0", lifespan=lifespan)
 
