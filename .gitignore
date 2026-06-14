@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+backend/.venv/
+
+# Environment and databases
+backend/.env
+backend/zr4k.db
+backend/sessions/userbot_*.session
+backend/sessions/userbot_*.session-journal
+backend/sessions/*.session
+backend/sessions/*.session-journal
+
+# Executables and archives
+backend/cloudflared.exe
+ngrok.zip
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+
+# Editors and system files
+.vscode/
+.idea/
+.DS_Store
+*.log
