@@ -27,8 +27,6 @@ import {
   CaretDown
 } from '@phosphor-icons/react';
 
-
-
 const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Moscow";
 
 const originalFetch = window.fetch;
@@ -42,17 +40,15 @@ window.fetch = function (input, init) {
     }
     init.headers = headers;
   }
-  return originalFetch.call(this, input, init);
+  return originalFetch(input, init);
 };
 
 const API_BASE = window.location.origin + "/api";
-
 
 const TRANSLATIONS = {
   ru: {
     dashboard: "Дашборд",
     digest: "AI Дайджест",
-
     sources: "Источники",
     settings: "Настройки",
     info: "О приложении",
@@ -116,7 +112,6 @@ const TRANSLATIONS = {
     admin_promo_details: "Дни: {days} · Исп: {uses}/{max}",
     get_pro_title: "Получить PRO",
     get_pro_desc: "Снятие ограничений. До 100 каналов, 200 фильтров и умный AI Дайджест с историей.",
-
     pay_stars_btn: "Оплатить (50 Stars)",
     user_card_title: "Карточка пользователя",
     user_status_banned: "ЗАБЛОКИРОВАН",
@@ -293,7 +288,6 @@ export default function App() {
   const [sources, setSources] = useState<ChannelSource[]>([]);
   const [messages, setMessages] = useState<CaughtMessage[]>([]);
   
-  // Dashboard sort order
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   
   const [selectedSourceId, setSelectedSourceId] = useState<number | null>(null);
@@ -351,12 +345,10 @@ export default function App() {
     }, 300);
   };
   
-
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Admin state
   const [adminView, setAdminView] = useState<'dashboard' | 'users' | 'pro' | 'promos'>('dashboard');
   const [adminStats, setAdminStats] = useState<any>(null);
   const [adminPromocodes, setAdminPromocodes] = useState<any[]>([]);
@@ -368,7 +360,6 @@ export default function App() {
   const [newPromoDuration, setNewPromoDuration] = useState(30);
   const [newPromoMaxAct, setNewPromoMaxAct] = useState(1);
 
-  // Modals state
   const [showBuyProModal, setShowBuyProModal] = useState(false);
   const [showDocModal, setShowDocModal] = useState(false);
   const [proTooltipVisible, setProTooltipVisible] = useState(false);
@@ -424,7 +415,6 @@ export default function App() {
       fetchMessages();
       fetchSources();
     }
-
     else if (activeTab === 'sources') {
       fetchSources();
       if (prevTabRef.current !== 'sources') {
@@ -571,8 +561,6 @@ export default function App() {
     })
     .catch(e => { showError(e.message); });
   };
-
-
 
   const fetchDigestHistory = async () => {
     try {
@@ -730,7 +718,6 @@ export default function App() {
     } catch (e: any) { showError(e.message); }
   };
 
-
   const handleProBadgeClick = () => {
     if (user?.is_pro) {
       setProTooltipVisible(true);
@@ -815,7 +802,6 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      {/* Toasts */}
       <div className="toast-container">
         <AnimatePresence>
           {errorMsg && (
@@ -833,11 +819,9 @@ export default function App() {
         </AnimatePresence>
       </div>
 
-      {/* Header */}
       <header className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 className="page-title">{getPageTitle()}</h1>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-
           {user?.is_admin && (
             <button 
               className="btn btn-secondary" 
@@ -875,7 +859,6 @@ export default function App() {
               {user?.is_pro ? "PRO" : "FREE"}
             </div>
             
-            {/* PRO Expiry Tooltip */}
             <AnimatePresence>
               {proTooltipVisible && user?.is_pro && (
                 <motion.div 
@@ -905,7 +888,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Content */}
       <main style={{ flex: 1, paddingBottom: '90px' }}>
         <AnimatePresence mode="wait">
           <motion.div 
@@ -931,7 +913,6 @@ export default function App() {
                     <span className="metric-label" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-tertiary)' }}>{t('sources_count')}</span>
                     <span className="metric-value" style={{ fontSize: '24px', fontWeight: 400 }}>{sources.length}</span>
                   </div>
-
                 </div>
 
                 <div className="flex justify-between items-center mb-2" style={{ padding: '0 20px' }}>
@@ -959,7 +940,7 @@ export default function App() {
                         key={msg.id}
                       >
                         <div className="feed-meta">
-                           <span className="feed-source">{msg.channel_title || `@${msg.channel_username}`}</span>
+                          <span className="feed-source">{msg.channel_title || `@${msg.channel_username}`}</span>
                           <span className="feed-time">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                         <div className="feed-text">{msg.text}</div>
@@ -987,8 +968,6 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3">
-                    
-                    {/* View Switcher */}
                     <div className="segmented-control">
                       <button 
                         className={`segmented-btn ${digestView === 'generate' ? 'active' : ''}`}
@@ -1012,8 +991,6 @@ export default function App() {
 
                     {digestView === 'generate' && (
                       <>
-
-                        {/* MANUAL GENERATION SECTION */}
                         <div className="bento-cell">
                           <span className="label" style={{ marginBottom: '16px', fontWeight: 700, fontSize: '15px', color: 'var(--text-primary)', letterSpacing: '0.03em', display: 'block' }}>{t('manual_generation')}</span>
                           
@@ -1297,7 +1274,6 @@ export default function App() {
                                         {t('daily_digest_desc')}
                                       </p>
                                       
-                                      {/* Weekdays Selector */}
                                       <div style={{ marginBottom: '12px', width: '100%' }}>
                                         <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
                                           {isRu ? "Дни недели:" : "Days of the week:"}
@@ -1337,7 +1313,6 @@ export default function App() {
                                         </div>
                                       </div>
 
-                                      {/* Time Selection */}
                                       <div className="flex justify-between items-center bg-white/5 p-3 rounded-lg mb-3">
                                         <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('time_msk')}</span>
                                         <select 
@@ -1353,7 +1328,6 @@ export default function App() {
                                         </select>
                                       </div>
 
-                                      {/* Save Button */}
                                       <button
                                         onClick={() => updateSourceSchedule(src.id, draft.time, draft.days)}
                                         className="btn btn-primary w-full"
@@ -1495,8 +1469,6 @@ export default function App() {
                                     ))}
                                     {keywords.length === 0 && <span style={{ fontSize: '13px', color: 'var(--text-tertiary)' }}>{t('no_filters')}</span>}
                                   </div>
-
-
                                 </div>
                               </motion.div>
                             )}
@@ -1523,7 +1495,7 @@ export default function App() {
                     <div className="flex items-center" style={{ justifyContent: 'space-between' }}>
                       <span style={{ color: 'var(--text-secondary)', fontSize: 14 }}>{t('subscription_status')}</span>
                       <span style={{ color: user?.is_pro ? 'var(--accent)' : 'var(--text-primary)', fontWeight: 600, fontSize: 14 }}>
-                         {user?.is_pro ? (user.is_admin ? t('status_lifetime') : "PRO") : "FREE"}
+                        {user?.is_pro ? (user.is_admin ? t('status_lifetime') : "PRO") : "FREE"}
                       </span>
                     </div>
                     {user?.is_pro && user?.pro_expires_at && !user.is_admin && (
@@ -1632,9 +1604,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* AI Statistics */}
                     <div className="bento-cell mt-4" style={{ padding: '16px', gap: 0 }}>
-                      {/* Section Header */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
                         <Sparkle size={16} color="var(--accent)" weight="fill" />
                         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -1691,7 +1661,6 @@ export default function App() {
                               flexDirection: 'column',
                               gap: 10
                             }}>
-                              {/* Row 1: Name + dot + call counts */}
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.03em' }}>
@@ -1704,7 +1673,6 @@ export default function App() {
                                     display: 'inline-block'
                                   }} />
                                 </div>
-                                {/* Call counts */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--success)', fontSize: 12, fontWeight: 500 }}>
                                     <CheckCircle size={12} weight="fill" />
@@ -1719,9 +1687,7 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {/* Row 2: Progress bar + limit label */}
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                {/* Bar */}
                                 <div style={{ height: 4, width: '100%', background: 'rgba(255,255,255,0.06)', borderRadius: 9999, overflow: 'hidden' }}>
                                   <div style={{
                                     height: '100%',
@@ -1731,7 +1697,6 @@ export default function App() {
                                     transition: 'width 0.6s cubic-bezier(0.16,1,0.3,1)'
                                   }} />
                                 </div>
-                                {/* Label row */}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                   <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{limitUnit}</span>
                                   <span style={{ fontSize: 11, fontWeight: 600, color: pct < 15 ? 'var(--danger)' : pct < 50 ? '#FF9F0A' : 'var(--text-secondary)' }}>
@@ -1740,7 +1705,6 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {/* Row 3: Token chips */}
                               <div style={{ display: 'flex', gap: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                                 {[
                                   { label: isRu ? 'Вход' : 'In', value: stats.prompt_tokens },
@@ -1770,7 +1734,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Sub Views for Admin */}
                 {(adminView === 'users' || adminView === 'pro') && (
                   <div className="bento-cell" style={{ padding: 16 }}>
                     <div className="flex items-center gap-4 mb-4">
@@ -1870,7 +1833,6 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* Floating Pill Nav */}
       <nav className="nav-pill-container">
         <button className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
           <SquaresFour size={24} weight={activeTab === 'dashboard' ? "fill" : "regular"} />
@@ -1889,7 +1851,6 @@ export default function App() {
         </button>
       </nav>
 
-      {/* Buy PRO Modal */}
       <AnimatePresence>
         {showBuyProModal && (
           <motion.div 
@@ -1929,7 +1890,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Admin User Details Modal */}
       <AnimatePresence>
         {adminUserDetails && (
           <motion.div 
@@ -1980,7 +1940,6 @@ export default function App() {
                 </div>
               </div>
 
-              
               <div className="flex flex-col gap-3">
                 <div className="bento-cell">
                   <div className="flex" style={{ justifyContent: 'space-between' }}>
@@ -2142,8 +2101,6 @@ export default function App() {
                       {t('user_manage_subscription')}
                     </button>
                     <button 
-
-
                       className="btn" 
                       style={{ 
                         padding: '12px', 
@@ -2160,9 +2117,9 @@ export default function App() {
                       }} 
                       onClick={() => {
                         if (adminUserDetails.is_banned) {
-                          banUser(adminUserDetails.telegram_id); // Unban directly
+                          banUser(adminUserDetails.telegram_id);
                         } else {
-                          setBanConfirmModal(adminUserDetails.telegram_id); // Open ban confirm
+                          setBanConfirmModal(adminUserDetails.telegram_id);
                         }
                       }}
                     >
@@ -2176,7 +2133,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Manage PRO Modal */}
       <AnimatePresence>
         {showManageProModal !== null && (
           <motion.div 
@@ -2242,7 +2198,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Documentation Bottom Sheet Modal */}
       <AnimatePresence>
         {showDocModal && (
           <motion.div 
@@ -2301,8 +2256,7 @@ export default function App() {
                     </div>
 
                     <div className="bento-cell" style={{ gap: '8px', alignItems: 'flex-start' }}>
-                       <h4 style={{ color: 'var(--accent)', fontSize: '15px', fontWeight: 600, margin: '0 0 4px' }}>3. AI Дайджест</h4>
-
+                      <h4 style={{ color: 'var(--accent)', fontSize: '15px', fontWeight: 600, margin: '0 0 4px' }}>3. AI Дайджест</h4>
                       <p style={{ margin: 0, fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)' }}>
                         Генерация структурированных ИИ-сводок по истории сообщений за любой период от <strong>1 до 24 часов</strong>.
                       </p>
@@ -2353,7 +2307,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Ban Confirmation Modal */}
       <AnimatePresence>
         {banConfirmModal !== null && (
           <motion.div 
@@ -2379,7 +2332,6 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-
     </div>
   );
 }
