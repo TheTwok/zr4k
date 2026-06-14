@@ -41,7 +41,7 @@ window.fetch = function (input, init) {
     }
     init.headers = plainHeaders;
   }
-  return originalFetch(input, init);
+  return originalFetch.call(window, input, init);
 };
 
 const API_BASE = window.location.origin + "/api";
