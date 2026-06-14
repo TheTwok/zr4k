@@ -15,6 +15,12 @@ class Tee:
         self.stream.flush()
         self.file.flush()
 
+    def isatty(self):
+        return hasattr(self.stream, 'isatty') and self.stream.isatty()
+
+    def fileno(self):
+        return self.stream.fileno()
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
