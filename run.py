@@ -13,6 +13,9 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
 def get_env_app_url():
+    val = os.getenv("APP_URL")
+    if val:
+        return val
     base_dir = os.path.dirname(os.path.abspath(__file__))
     env_path = os.path.join(base_dir, "backend", ".env")
     if not os.path.exists(env_path):
@@ -24,6 +27,9 @@ def get_env_app_url():
     return None
 
 def get_env_ngrok_token():
+    val = os.getenv("NGROK_AUTHTOKEN")
+    if val:
+        return val
     base_dir = os.path.dirname(os.path.abspath(__file__))
     env_path = os.path.join(base_dir, "backend", ".env")
     if not os.path.exists(env_path):
@@ -162,6 +168,11 @@ def main():
     
     tunnel_needed = not is_https or is_local or is_tunnel
     
+    # Check if running inside a container (Docker/K8s/etc.)
+    if os.path.exists('/.dockerenv') or os.getenv('K_SERVICE') or os.getenv('DOCKER_ENV') or os.getenv('PORT'):
+        print("🐳 Container/Cloud environment detected. Disabling automatic local tunnel.")
+        tunnel_needed = False
+        
     if tunnel_needed:
         print("🌐 Starting automatic Cloudflare Tunnel (TryCloudflare)...")
         
