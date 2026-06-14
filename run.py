@@ -132,10 +132,10 @@ def main():
 
     
     # 1. Start FastAPI backend (uvicorn) first
-    print("🚀 Starting FastAPI backend on http://127.0.0.1:8000...")
+    print("🚀 Starting FastAPI backend on http://0.0.0.0:8000...")
     backend_proc = subprocess.Popen([
         venv_python, "-m", "uvicorn", "backend.app.main:app", 
-        "--host", "127.0.0.1", "--port", "8000"
+        "--host", "0.0.0.0", "--port", "8000"
     ], cwd=base_dir)
     
     # Wait for backend to bind to the port
