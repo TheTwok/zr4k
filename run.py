@@ -37,17 +37,21 @@ if __name__ == "__main__":
             print(f"📦 Shared storage found at {shared_dir}. Checking files...")
             import shutil
             
-            # 1. zr4k.db (or zr4k.db.txt or zr4k.txt)
-            db_candidates = ["zr4k.db", "zr4k.db.txt", "zr4k.txt"]
-            shared_db = None
-            for cand in db_candidates:
-                cand_path = os.path.join(shared_dir, cand)
-                if os.path.exists(cand_path):
-                    shared_db = cand_path
-                    break
-            
+            # Helper to get files by extension sorted by modification time (newest first)
+            def get_newest_files(directory, extension):
+                try:
+                    files = [f for f in os.listdir(directory) if f.endswith(extension)]
+                    files.sort(key=lambda x: os.path.getmtime(os.path.join(directory, x)), reverse=True)
+                    return files
+                except Exception as e:
+                    print(f"⚠️ Error listing files for {extension}: {e}")
+                    return []
+
+            # 1. Copy the newest .db file to zr4k.db
+            db_files = get_newest_files(shared_dir, ".db")
             target_db = os.path.join(data_dir, "zr4k.db")
-            if shared_db:
+            if db_files:
+                shared_db = os.path.join(shared_dir, db_files[0])
                 if not os.path.exists(target_db):
                     print(f"💾 Copying database from shared storage: {shared_db} -> {target_db}")
                     try:
@@ -58,9 +62,9 @@ if __name__ == "__main__":
                 else:
                     print(f"💾 Database already exists at {target_db}. Skipping copy.")
             else:
-                print(f"💾 No zr4k.db found in shared storage.")
+                print(f"💾 No .db files found in shared storage.")
                     
-            # 2. sessions (including userbot_*.session or userbot_*.session.txt or userbot_*.txt)
+            # 2. Copy the newest .session file to userbot_79892958989.session
             sessions_dir = os.path.join(data_dir, "sessions")
             os.makedirs(sessions_dir, exist_ok=True)
             try:
@@ -68,33 +72,22 @@ if __name__ == "__main__":
             except Exception:
                 pass
                 
-            for f in os.listdir(shared_dir):
-                is_session = False
-                target_filename = None
-                
-                # Check for session extension or txt-wrapped session
-                if f.endswith(".session"):
-                    is_session = True
-                    target_filename = f
-                elif f.endswith(".session.txt"):
-                    is_session = True
-                    target_filename = f[:-4] # strip .txt
-                elif f.startswith("userbot_") and f.endswith(".txt"):
-                    is_session = True
-                    target_filename = f[:-4] + ".session" # change .txt to .session
-                
-                if is_session and target_filename:
-                    shared_session = os.path.join(shared_dir, f)
-                    target_session = os.path.join(sessions_dir, target_filename)
-                    if not os.path.exists(target_session):
-                        print(f"🔑 Copying session from shared storage: {shared_session} -> {target_session}")
-                        try:
-                            shutil.copy2(shared_session, target_session)
-                            os.chmod(target_session, 0o777)
-                        except Exception as e:
-                            print(f"❌ Error copying session file {f}: {e}")
-                    else:
-                        print(f"🔑 Session file {target_filename} already exists at {target_session}. Skipping copy.")
+            session_files = get_newest_files(shared_dir, ".session")
+            if session_files:
+                shared_session = os.path.join(shared_dir, session_files[0])
+                # Destination must match the registered userbot session name in db: userbot_79892958989.session
+                target_session = os.path.join(sessions_dir, "userbot_79892958989.session")
+                if not os.path.exists(target_session):
+                    print(f"🔑 Copying session from shared storage: {shared_session} -> {target_session}")
+                    try:
+                        shutil.copy2(shared_session, target_session)
+                        os.chmod(target_session, 0o777)
+                    except Exception as e:
+                        print(f"❌ Error copying session file: {e}")
+                else:
+                    print(f"🔑 Session file already exists at {target_session}. Skipping copy.")
+            else:
+                print(f"🔑 No .session files found in shared storage.")
 
     port = int(os.getenv("PORT", "8000"))
     print(f"🚀 Starting Uvicorn server on http://0.0.0.0:{port}...")
