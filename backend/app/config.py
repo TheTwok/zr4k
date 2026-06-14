@@ -59,6 +59,17 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Force APP_URL to use Bothost domain if DOMAIN env var is set (ignores incorrect values from local .env)
+domain = os.getenv("DOMAIN")
+if domain:
+    domain = domain.strip("'\" ")
+    if domain:
+        if not domain.startswith("http"):
+            settings.app_url = f"https://{domain}"
+        else:
+            settings.app_url = domain.rstrip("/")
+        print(f"🌐 Running on Bothost. Forcing APP_URL to: {settings.app_url}")
+
 # Force persistent SQLite path inside /app/data on Bothost
 if os.path.exists("/app/data"):
     if settings.database_url.startswith("sqlite"):
