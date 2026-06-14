@@ -37,10 +37,17 @@ if __name__ == "__main__":
             print(f"📦 Shared storage found at {shared_dir}. Checking files...")
             import shutil
             
-            # 1. zr4k.db
-            shared_db = os.path.join(shared_dir, "zr4k.db")
+            # 1. zr4k.db (or zr4k.db.txt or zr4k.txt)
+            db_candidates = ["zr4k.db", "zr4k.db.txt", "zr4k.txt"]
+            shared_db = None
+            for cand in db_candidates:
+                cand_path = os.path.join(shared_dir, cand)
+                if os.path.exists(cand_path):
+                    shared_db = cand_path
+                    break
+            
             target_db = os.path.join(data_dir, "zr4k.db")
-            if os.path.exists(shared_db):
+            if shared_db:
                 if not os.path.exists(target_db):
                     print(f"💾 Copying database from shared storage: {shared_db} -> {target_db}")
                     try:
@@ -53,7 +60,7 @@ if __name__ == "__main__":
             else:
                 print(f"💾 No zr4k.db found in shared storage.")
                     
-            # 2. sessions
+            # 2. sessions (including userbot_*.session or userbot_*.session.txt or userbot_*.txt)
             sessions_dir = os.path.join(data_dir, "sessions")
             os.makedirs(sessions_dir, exist_ok=True)
             try:
@@ -62,9 +69,23 @@ if __name__ == "__main__":
                 pass
                 
             for f in os.listdir(shared_dir):
-                if f.endswith(".session") or f.endswith(".session-journal"):
+                is_session = False
+                target_filename = None
+                
+                # Check for session extension or txt-wrapped session
+                if f.endswith(".session"):
+                    is_session = True
+                    target_filename = f
+                elif f.endswith(".session.txt"):
+                    is_session = True
+                    target_filename = f[:-4] # strip .txt
+                elif f.startswith("userbot_") and f.endswith(".txt"):
+                    is_session = True
+                    target_filename = f[:-4] + ".session" # change .txt to .session
+                
+                if is_session and target_filename:
                     shared_session = os.path.join(shared_dir, f)
-                    target_session = os.path.join(sessions_dir, f)
+                    target_session = os.path.join(sessions_dir, target_filename)
                     if not os.path.exists(target_session):
                         print(f"🔑 Copying session from shared storage: {shared_session} -> {target_session}")
                         try:
@@ -73,7 +94,7 @@ if __name__ == "__main__":
                         except Exception as e:
                             print(f"❌ Error copying session file {f}: {e}")
                     else:
-                        print(f"🔑 Session file {f} already exists at {target_session}. Skipping copy.")
+                        print(f"🔑 Session file {target_filename} already exists at {target_session}. Skipping copy.")
 
     port = int(os.getenv("PORT", "8000"))
     print(f"🚀 Starting Uvicorn server on http://0.0.0.0:{port}...")
