@@ -11,7 +11,6 @@ from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelReque
 from telethon.tl.functions.account import UpdateNotifySettingsRequest
 from telethon.tl.types import InputPeerNotifySettings, InputNotifyPeer, InputFolderPeer
 from telethon.tl.functions.folders import EditPeerFoldersRequest
-import redis.asyncio as aioredis
 from aiogram import Bot
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,6 +20,7 @@ from backend.app.database import async_session
 from backend.app.models import User, Channel, UserChannel, Keyword, UserbotSession
 from backend.app.crud import deactivate_userbot_session, save_caught_message
 from backend.app.matcher import evaluate_message
+from backend.app.shared import deduplicator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("zr4k.parser")
@@ -86,12 +86,7 @@ async def process_new_message(event, client_session_id: int):
     if not message_text:
         return
 
-    global redis_client
-    if redis_client is None:
-        redis_client = aioredis.from_url(settings.redis_url)
-    dup_key = f"zr4k:msg_dup:{channel_id}:{message_id}"
-    is_duplicate = await redis_client.set(dup_key, "1", ex=300, nx=True)
-    if not is_duplicate:
+    if deduplicator.is_duplicate(channel_id, message_id):
         return
 
     logger.info(f"Processing message {message_id} from channel ID {channel_id}")
@@ -176,9 +171,14 @@ async def setup_client_handlers(client: TelegramClient, session_id: int):
 
 async def run_client(session_id: int, phone: str, session_name: str, api_id: int, api_hash: str):
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    session_path = os.path.join(base_dir, "sessions", session_name)
+    if os.path.exists("/app/data"):
+        sessions_dir = "/app/data/sessions"
+    else:
+        sessions_dir = os.path.join(base_dir, "sessions")
+    os.makedirs(sessions_dir, exist_ok=True)
+    session_path = os.path.join(sessions_dir, session_name)
     
-    logger.info(f"Starting Telethon client for {session_name}...")
+    logger.info(f"Starting Telethon client for {session_name} at {session_path}...")
     client = TelegramClient(session_path, api_id, api_hash)
     clients[session_id] = client
 
@@ -202,63 +202,56 @@ async def run_client(session_id: int, phone: str, session_name: str, api_id: int
         logger.error(f"Unexpected error in client loop for {session_name}: {str(e)}")
         if "auth" in str(e).lower() or "unregistered" in str(e).lower():
             await handle_session_death(session_id, session_name, phone, str(e))
+    finally:
+        logger.info(f"Disconnecting client for {session_name}...")
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+
+async def fetch_history_direct(channels_data: list, hours: int) -> list:
+    from datetime import datetime, timedelta, timezone
+    offset_date = datetime.now(timezone.utc) - timedelta(hours=hours)
+    all_texts = []
+    
+    async def fetch_channel_history(client, c_username):
+        texts = []
+        try:
+            entity = await client.get_entity(c_username)
+            c_title = getattr(entity, 'title', None) or c_username
+            async for msg in client.iter_messages(entity, limit=300):
+                if msg.date < offset_date:
+                    break
+                if msg.text:
+                    texts.append({
+                        "channel": c_title,
+                        "text": msg.text
+                    })
+        except Exception as e:
+            logger.error(f"Failed to fetch history for {c_username}: {str(e)}")
+        return texts
+
+    history_tasks = []
+    for cdata in channels_data:
+        session_id = cdata.get("session_id")
+        c_username = cdata.get("username")
+        if not session_id or not c_username:
+            continue
+        
+        client = clients.get(session_id)
+        if not client:
+            continue
+        history_tasks.append(fetch_channel_history(client, c_username))
+        
+    if history_tasks:
+        results = await asyncio.gather(*history_tasks)
+        for r_texts in results:
+            all_texts.extend(r_texts)
+            
+    return all_texts
 
 async def handle_control_action(data: dict):
     action = data.get("action")
-
-    if action == "fetch_history":
-        request_id = data.get("request_id")
-        channels_data = data.get("channels_data", [])
-        hours = data.get("hours", 24)
-        logger.info(f"Action FETCH_HISTORY: {hours}h for {len(channels_data)} channels (req: {request_id})")
-        
-        from datetime import datetime, timedelta, timezone
-        offset_date = datetime.now(timezone.utc) - timedelta(hours=hours)
-        all_texts = []
-        
-        async def fetch_channel_history(client, c_username):
-            texts = []
-            try:
-                entity = await client.get_entity(c_username)
-                c_title = getattr(entity, 'title', None) or c_username
-                async for msg in client.iter_messages(entity, limit=300):
-                    if msg.date < offset_date:
-                        break
-                    if msg.text:
-                        texts.append({
-                            "channel": c_title,
-                            "text": msg.text
-                        })
-            except Exception as e:
-                logger.error(f"Failed to fetch history for {c_username}: {str(e)}")
-            return texts
-
-        history_tasks = []
-        for cdata in channels_data:
-            session_id = cdata.get("session_id")
-            c_username = cdata.get("username")
-            if not session_id or not c_username:
-                continue
-            
-            client = clients.get(session_id)
-            if not client:
-                continue
-            history_tasks.append(fetch_channel_history(client, c_username))
-            
-        if history_tasks:
-            results = await asyncio.gather(*history_tasks)
-            for r_texts in results:
-                all_texts.extend(r_texts)
-                
-        try:
-            r = aioredis.from_url(settings.redis_url)
-            await r.set(f"zr4k:rpc:res:{request_id}", json.dumps(all_texts), ex=60)
-            await r.aclose()
-            logger.info(f"Published history result for req: {request_id} ({len(all_texts)} msgs)")
-        except Exception as e:
-            logger.error(f"Failed to return RPC result: {str(e)}")
-        return
-
     username = data.get("username", "").lower()
     channel_id = data.get("channel_id")
 
@@ -395,28 +388,6 @@ async def sync_unassigned_channels():
         except Exception as e:
             logger.error(f"Error during auto-join of {ch.username}: {str(e)}")
 
-async def listen_redis_control():
-    logger.info("Initializing Redis PubSub listener...")
-    r = aioredis.from_url(settings.redis_url)
-    pubsub = r.pubsub()
-    await pubsub.subscribe("zr4k:parser:control")
-    
-    try:
-        async for message in pubsub.listen():
-            logger.info(f"Redis PubSub listener received raw message: {message}")
-            if message["type"] == "message":
-                try:
-                    data = json.loads(message["data"])
-                    logger.info(f"Parsed PubSub command data: {data}")
-                    await handle_control_action(data)
-                except Exception as e:
-                    logger.error(f"Error handling control action: {str(e)}")
-    except asyncio.CancelledError:
-        pass
-    finally:
-        await pubsub.unsubscribe("zr4k:parser:control")
-        await r.aclose()
-
 async def start_parser():
     logger.info("Starting ZR4K Parser Bot pool...")
     
@@ -450,9 +421,6 @@ async def start_parser():
         )
         tasks.append(task)
 
-    control_task = asyncio.create_task(listen_redis_control())
-    tasks.append(control_task)
-
     sync_task = asyncio.create_task(sync_unassigned_channels())
     tasks.append(sync_task)
 
@@ -462,9 +430,6 @@ async def start_parser():
         logger.info("Parser Bot shutting down...")
     finally:
         await bot.session.close()
-        global redis_client
-        if redis_client:
-            await redis_client.aclose()
 
 if __name__ == "__main__":
     try:

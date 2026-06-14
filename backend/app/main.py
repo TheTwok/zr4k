@@ -1,5 +1,7 @@
 import json
 import os
+import asyncio
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -8,28 +10,93 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
-import redis.asyncio as aioredis
 from aiogram import Bot, types
+from aiogram.types import WebAppInfo, MenuButtonWebApp, MenuButtonDefault
 
 from backend.app.config import settings
 from backend.app.database import engine, Base, get_db, ensure_db_exists, async_session
-from backend.app.models import User, Channel, UserChannel, Keyword, CaughtMessage, Promocode, UserbotSession, Payment, AIUsageStat
+from backend.app.models import User, Channel, UserChannel, Keyword, CaughtMessage, Promocode, UserbotSession, Payment, AIUsageStat, DigestHistory
 from backend.app.auth import get_current_user
 import backend.app.crud as crud
 import backend.app.schemas as schemas
 from backend.app.digest import generate_summary
+from backend.bot import dp, bot as client_bot
+from backend.parser import start_parser, handle_control_action, fetch_history_direct
+from backend.app.tasks import send_scheduled_digests, notify_users_expiry
 
-# Shared Redis client and Bot instances
-redis_client = None
-bot = None
+logger = logging.getLogger("zr4k.main")
+bot = client_bot
+
+background_tasks = set()
+
+async def scheduler_loop():
+    logger.info("⏰ Starting internal scheduler loop...")
+    # Wait a bit on startup
+    await asyncio.sleep(10)
+    while True:
+        try:
+            now = datetime.utcnow()
+            # Run scheduled digests every hour (minute == 0)
+            if now.minute == 0:
+                logger.info("Scheduled time reached. Running send_scheduled_digests...")
+                await send_scheduled_digests(None)
+            
+            # Run subscription check once a day at 10:00 UTC
+            if now.hour == 10 and now.minute == 0:
+                logger.info("PRO subscription check time reached. Running notify_users_expiry...")
+                await notify_users_expiry(None)
+                
+        except Exception as e:
+            logger.error(f"Error in scheduler loop: {e}")
+        
+        # Sleep until the start of the next minute
+        now = datetime.utcnow()
+        sleep_secs = 60 - now.second - (now.microsecond / 1000000.0)
+        await asyncio.sleep(max(0.1, sleep_secs + 0.1))
+
+async def start_client_bot():
+    try:
+        # Delete webhook if set and start polling
+        await client_bot.delete_webhook(drop_pending_updates=True)
+        
+        # Configure WebApp Menu Button
+        app_url = settings.app_url
+        is_https = app_url.startswith("https://")
+        is_local = "localhost" in app_url or "127.0.0.1" in app_url
+        
+        if is_https and not is_local:
+            try:
+                await client_bot.set_chat_menu_button(
+                    menu_button=MenuButtonWebApp(
+                        text="Открыть",
+                        web_app=WebAppInfo(url=app_url)
+                    )
+                )
+                logger.info(f"Successfully configured Menu Button to WebApp: {app_url}")
+            except Exception as e:
+                logger.error(f"Failed to set WebApp Menu Button: {e}")
+        else:
+            try:
+                await client_bot.set_chat_menu_button(
+                    menu_button=MenuButtonDefault()
+                )
+                logger.info("Reset WebApp Menu Button to default (not HTTPS or local address).")
+            except Exception as e:
+                logger.error(f"Failed to reset WebApp Menu Button: {e}")
+
+        await dp.start_polling(client_bot)
+    except Exception as e:
+        logger.error(f"Error starting client bot: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global redis_client, bot
-    
     # 1. Гарантированно создаем папку для данных
-    os.makedirs("/app/data", exist_ok=True)
-    
+    db_path = settings.database_url.replace("sqlite+aiosqlite:///", "")
+    if "/" in db_path:
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+            
     # 2. Проверяем БД
     await ensure_db_exists()
     
@@ -53,45 +120,25 @@ async def lifespan(app: FastAPI):
                 )
                 session.add(admin_user)
                 await session.commit()
+                logger.info(f"✅ Seeded admin user {settings.admin_user_id} automatically.")
     
-    # 5. Redis и Bot
-    redis_client = aioredis.from_url(settings.redis_url)
-    bot = Bot(token=settings.telegram_bot_token)
+    # 5. Start Bot, Parser, and Scheduler loop in background
+    bot_task = asyncio.create_task(start_client_bot())
+    parser_task = asyncio.create_task(start_parser())
+    sched_task = asyncio.create_task(scheduler_loop())
     
-    yield
-    
-    await redis_client.aclose()
-    await bot.session.close()
-        
-    # Seed admin user if configured
-    if settings.admin_user_id:
-        async with async_session() as session:
-            stmt = select(User).where(User.telegram_id == settings.admin_user_id)
-            res = await session.execute(stmt)
-            admin_user = res.scalar_one_or_none()
-            if not admin_user:
-                admin_user = User(
-                    telegram_id=settings.admin_user_id,
-                    username="admin",
-                    language_code="ru",
-                    is_admin=True,
-                    timezone="Europe/Moscow"
-                )
-                session.add(admin_user)
-                await session.commit()
-                print(f"✅ Seeded admin user {settings.admin_user_id} automatically.")
-    
-    # 2. Initialize Redis client
-    redis_client = aioredis.from_url(settings.redis_url)
-    
-    # 3. Initialize Client Bot for sending invoices
-    bot = Bot(token=settings.telegram_bot_token)
+    background_tasks.add(bot_task)
+    background_tasks.add(parser_task)
+    background_tasks.add(sched_task)
     
     yield
     
-    # Cleanups
-    await redis_client.aclose()
-    await bot.session.close()
+    # 6. Cleanups
+    for task in background_tasks:
+        task.cancel()
+    await asyncio.gather(*background_tasks, return_exceptions=True)
+    background_tasks.clear()
+    await client_bot.session.close()
 
 app = FastAPI(title="ZR4K API", version="1.0.0", lifespan=lifespan)
 
@@ -196,13 +243,12 @@ async def add_source(
         )
         
         # If the channel is brand new or needs to be monitored, instruct the parser bot
-        if is_new_globally and redis_client:
-            control_msg = {
+        if is_new_globally:
+            await handle_control_action({
                 "action": "join",
                 "username": channel.username,
                 "channel_id": channel.id
-            }
-            await redis_client.publish("zr4k:parser:control", json.dumps(control_msg))
+            })
             
         return channel
     except ValueError as e:
@@ -224,13 +270,12 @@ async def remove_source(
     should_leave = await crud.remove_user_channel(db, current_user.telegram_id, channel_id)
     
     # If no other user tracks this channel, instruct parser to leave
-    if should_leave and redis_client:
-        control_msg = {
+    if should_leave:
+        await handle_control_action({
             "action": "leave",
             "username": channel.username,
             "channel_id": channel_id
-        }
-        await redis_client.publish("zr4k:parser:control", json.dumps(control_msg))
+        })
         
     return {"status": "success", "message": f"Канал '{channel.username}' успешно удален."}
 
@@ -406,26 +451,7 @@ async def generate_ai_digest(
             "digest": "Нет доступных источников для парсинга. Добавьте источники."
         }
 
-    import uuid, json, asyncio
-    request_id = str(uuid.uuid4())
-    control_msg = {
-        "action": "fetch_history",
-        "request_id": request_id,
-        "channels_data": channels_data,
-        "hours": payload.period_hours
-    }
-    
-    await redis_client.publish("zr4k:parser:control", json.dumps(control_msg))
-    
-    # Wait for result
-    messages_texts = []
-    for _ in range(60): # Wait up to 30 seconds
-        await asyncio.sleep(0.5)
-        res_data = await redis_client.get(f"zr4k:rpc:res:{request_id}")
-        if res_data:
-            messages_texts = json.loads(res_data)
-            await redis_client.delete(f"zr4k:rpc:res:{request_id}")
-            break
+    messages_texts = await fetch_history_direct(channels_data, payload.period_hours)
 
     if not messages_texts:
         return {

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     debug: bool = Field(default=True)
 
     # DB & Redis URIs
-    database_url: str = Field(default=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///zr4k.db"))
+    database_url: str = Field(default=os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/data/zr4k.db" if os.path.exists("/app/data") else "sqlite+aiosqlite:///zr4k.db"))
     redis_url: str = Field(default=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 
     # Client Bot token
@@ -45,7 +45,10 @@ if settings.database_url.startswith("sqlite"):
     if ":///" in url:
         scheme, path = url.split(":///", 1)
         if not path.startswith("/") and not (len(path) > 1 and path[1] == ":"):
-            app_dir = os.path.dirname(os.path.abspath(__file__))
-            backend_dir = os.path.dirname(app_dir)
-            abs_path = os.path.abspath(os.path.join(backend_dir, path)).replace("\\", "/")
-            settings.database_url = f"{scheme}:///{abs_path}"
+            if path.startswith("app/data/") or path.startswith("data/"):
+                settings.database_url = f"{scheme}:////app/data/" + path.split("data/", 1)[1]
+            else:
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+                backend_dir = os.path.dirname(app_dir)
+                abs_path = os.path.abspath(os.path.join(backend_dir, path)).replace("\\", "/")
+                settings.database_url = f"{scheme}:///{abs_path}"
