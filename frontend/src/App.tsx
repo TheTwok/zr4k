@@ -31,14 +31,15 @@ const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe
 
 const originalFetch = window.fetch;
 window.fetch = function (input, init) {
+  init = init || {};
   const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as any).url;
+  
   if (url && url.includes('/api/')) {
-    init = init || {};
-    const headers = new Headers(init.headers || {});
-    if (!headers.has('X-User-Timezone')) {
-      headers.set('X-User-Timezone', userTimeZone);
+    const plainHeaders = { ...(init.headers || {}) } as Record<string, string>;
+    if (!plainHeaders['X-User-Timezone'] && !plainHeaders['x-user-timezone']) {
+      plainHeaders['X-User-Timezone'] = userTimeZone;
     }
-    init.headers = headers;
+    init.headers = plainHeaders;
   }
   return originalFetch(input, init);
 };
@@ -1661,7 +1662,7 @@ export default function App() {
                               flexDirection: 'column',
                               gap: 10
                             }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyCONtent: 'space-between' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.03em' }}>
                                     {p.toUpperCase()}
