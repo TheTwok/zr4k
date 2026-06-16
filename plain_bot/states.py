@@ -13,6 +13,10 @@ class PromoStates(StatesGroup):
     waiting_code = State()
 
 
+class ScheduleStates(StatesGroup):
+    waiting_time = State()
+
+
 class AdminPromoStates(StatesGroup):
     waiting_code = State()
     waiting_days = State()

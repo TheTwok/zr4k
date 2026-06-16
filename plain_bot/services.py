@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.types import User as TelegramUser
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select, update
 
 from backend.app import crud
 from backend.app.config import settings
@@ -25,6 +25,17 @@ from backend.app.models import (
     UserbotSession,
 )
 from backend.parser import fetch_history_direct, handle_control_action
+
+
+FREE_SOURCE_LIMIT = 1
+FREE_KEYWORDS_PER_SOURCE = 5
+PRO_SOURCE_LIMIT = 20
+PRO_KEYWORDS_PER_SOURCE = 20
+DIGEST_MAX_SOURCES = 5
+DIGEST_MAX_MESSAGES_PER_SOURCE = 60
+DIGEST_MAX_MESSAGE_CHARS = 700
+DIGEST_MAX_PAYLOAD_CHARS = 14000
+DIGEST_MAX_OUTPUT_CHARS = 3500
 
 
 MODE_LABELS = {
@@ -85,10 +96,69 @@ def dt_text(value: datetime | None) -> str:
     return value.strftime("%d.%m.%Y %H:%M")
 
 
+def is_owner_id(user_id: int | None) -> bool:
+    return bool(settings.admin_user_id and user_id == settings.admin_user_id)
+
+
+def is_owner(user: User | None) -> bool:
+    return bool(user and is_owner_id(user.telegram_id))
+
+
 def is_admin(user: User | None) -> bool:
     if not user:
         return False
-    return bool(user.is_admin or user.telegram_id == settings.admin_user_id)
+    return is_owner(user)
+
+
+def source_limit(user: User | None) -> int:
+    return PRO_SOURCE_LIMIT if user and user.is_pro else FREE_SOURCE_LIMIT
+
+
+def keyword_limit(user: User | None) -> int:
+    return PRO_KEYWORDS_PER_SOURCE if user and user.is_pro else FREE_KEYWORDS_PER_SOURCE
+
+
+def pro_until_text(user: User | None) -> str:
+    if is_owner(user):
+        return "Бессрочно"
+    return dt_text(user.pro_expires_at if user else None)
+
+
+def plan_label(user: User | None) -> str:
+    return "PRO" if user and user.is_pro else "Free"
+
+
+def clip_digest(text: str) -> str:
+    return clip(text, DIGEST_MAX_OUTPUT_CHARS)
+
+
+def prepare_digest_messages(messages_texts: list[dict | str]) -> list[dict | str]:
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    for item in messages_texts:
+        if isinstance(item, dict):
+            channel = str(item.get("channel") or "Неизвестный источник").strip()
+            text = str(item.get("text") or "").strip()
+        else:
+            channel = "Неизвестный источник"
+            text = str(item).strip()
+        if not text:
+            continue
+        if channel not in grouped:
+            grouped[channel] = []
+            order.append(channel)
+        if len(grouped[channel]) < DIGEST_MAX_MESSAGES_PER_SOURCE:
+            grouped[channel].append(clip(text, DIGEST_MAX_MESSAGE_CHARS))
+
+    prepared: list[dict[str, str]] = []
+    total_chars = 0
+    for channel in order[:DIGEST_MAX_SOURCES]:
+        for text in grouped[channel]:
+            if total_chars + len(text) > DIGEST_MAX_PAYLOAD_CHARS:
+                return prepared
+            prepared.append({"channel": channel, "text": text})
+            total_chars += len(text)
+    return prepared
 
 
 async def init_storage() -> None:
@@ -97,6 +167,7 @@ async def init_storage() -> None:
         await conn.run_sync(Base.metadata.create_all)
     if settings.admin_user_id:
         async with async_session() as db:
+            await db.execute(update(User).where(User.telegram_id != settings.admin_user_id).values(is_admin=False))
             stmt = select(User).where(User.telegram_id == settings.admin_user_id)
             res = await db.execute(stmt)
             admin = res.scalar_one_or_none()
@@ -111,6 +182,7 @@ async def init_storage() -> None:
                 db.add(admin)
             else:
                 admin.is_admin = True
+                admin.is_banned = False
             await db.commit()
 
 
@@ -132,8 +204,15 @@ async def ensure_user(tg_user: TelegramUser) -> User:
         if user.language_code != language_code:
             user.language_code = language_code
             changed = True
-        if tg_user.id == settings.admin_user_id and not user.is_admin:
-            user.is_admin = True
+        if tg_user.id == settings.admin_user_id:
+            if not user.is_admin:
+                user.is_admin = True
+                changed = True
+            if user.is_banned:
+                user.is_banned = False
+                changed = True
+        elif user.is_admin:
+            user.is_admin = False
             changed = True
         if changed:
             await db.commit()
@@ -162,12 +241,30 @@ async def overview(user_id: int) -> dict:
             "sources": sources_count or 0,
             "keywords": keywords_count or 0,
             "messages": messages_count or 0,
+            "source_limit": source_limit(user),
+            "keyword_limit": keyword_limit(user),
         }
 
 
 async def list_sources(user_id: int) -> list[Channel]:
     async with async_session() as db:
         return await crud.get_channels_by_user(db, user_id)
+
+
+async def list_digest_sources(user_id: int) -> list[Channel]:
+    async with async_session() as db:
+        stmt = (
+            select(Channel)
+            .join(UserChannel, UserChannel.channel_id == Channel.id)
+            .where(
+                UserChannel.user_id == user_id,
+                UserChannel.active == True,
+                Channel.userbot_session_id.isnot(None),
+            )
+            .order_by(Channel.username.asc())
+        )
+        res = await db.execute(stmt)
+        return list(res.scalars().all())
 
 
 async def add_source(user_id: int, link: str) -> Channel:
@@ -233,7 +330,11 @@ async def delete_keyword(user_id: int, keyword_id: int) -> bool:
         return await crud.delete_keyword(db, user_id, keyword_id)
 
 
-async def generate_digest(user_id: int, period_hours: int) -> str:
+async def generate_digest(user_id: int, period_hours: int, channel_ids: list[int] | None = None) -> str:
+    selected_ids = [int(item) for item in (channel_ids or [])]
+    if selected_ids and len(set(selected_ids)) > DIGEST_MAX_SOURCES:
+        raise ValueError(f"За один дайджест можно выбрать до {DIGEST_MAX_SOURCES} источников.")
+
     async with async_session() as db:
         user = await crud.get_user(db, user_id)
         if not user or not user.is_pro:
@@ -251,11 +352,15 @@ async def generate_digest(user_id: int, period_hours: int) -> str:
             .where(
                 UserChannel.user_id == user_id,
                 UserChannel.active == True,
+                Channel.userbot_session_id.isnot(None),
             )
+            .order_by(Channel.username.asc())
         )
+        if selected_ids:
+            stmt = stmt.where(Channel.id.in_(set(selected_ids)))
         res = await db.execute(stmt)
         channels = res.scalars().all()
-        channels_data = [{"username": c.username, "session_id": c.userbot_session_id} for c in channels if c.userbot_session_id]
+        channels_data = [{"username": c.username, "session_id": c.userbot_session_id} for c in channels[:DIGEST_MAX_SOURCES]]
 
     if not channels_data:
         return "Нет подключенных источников для парсинга."
@@ -264,7 +369,11 @@ async def generate_digest(user_id: int, period_hours: int) -> str:
     if not messages_texts:
         return "За выбранный период сообщений не найдено."
 
-    digest_text = await generate_summary(messages_texts)
+    prepared_messages = prepare_digest_messages(messages_texts)
+    if not prepared_messages:
+        return "За выбранный период не найдено подходящих текстовых сообщений."
+
+    digest_text = clip_digest(await generate_summary(prepared_messages))
 
     async with async_session() as db:
         user = await crud.get_user(db, user_id)
@@ -321,7 +430,7 @@ async def scheduled_digest_tick(bot: Bot) -> None:
             .where(
                 UserChannel.active == True,
                 UserChannel.digest_schedule_time.isnot(None),
-                User.pro_expires_at > now,
+                or_(User.is_admin == True, User.pro_expires_at > now),
             )
         )
         res = await session.execute(stmt)
@@ -335,7 +444,7 @@ async def scheduled_digest_tick(bot: Bot) -> None:
             user_tz = ZoneInfo("Europe/Moscow")
 
         local_now = now.replace(tzinfo=timezone.utc).astimezone(user_tz)
-        if user_channel.digest_schedule_time != f"{local_now.hour:02d}:00":
+        if user_channel.digest_schedule_time != f"{local_now.hour:02d}:{local_now.minute:02d}":
             continue
 
         local_day = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"][local_now.weekday()]
@@ -355,8 +464,12 @@ async def scheduled_digest_tick(bot: Bot) -> None:
                 messages = msg_res.scalars().all()
                 if not messages:
                     continue
-                messages_texts = [{"channel": channel.title or f"@{channel.username}", "text": text} for text in messages]
-                digest_text = await generate_summary(messages_texts, db=session)
+                messages_texts = prepare_digest_messages(
+                    [{"channel": channel.title or f"@{channel.username}", "text": text} for text in messages]
+                )
+                if not messages_texts:
+                    continue
+                digest_text = clip_digest(await generate_summary(messages_texts, db=session))
                 db_user = await crud.get_user(session, user.telegram_id)
                 if db_user:
                     db_user.last_digest_at = now
@@ -372,7 +485,11 @@ async def scheduled_digest_tick(bot: Bot) -> None:
 async def expiry_tick(bot: Bot) -> None:
     now = datetime.utcnow()
     async with async_session() as session:
-        stmt = select(User).where(User.pro_expires_at >= now, User.pro_expires_at <= now + timedelta(days=1))
+        stmt = select(User).where(
+            User.is_admin == False,
+            User.pro_expires_at >= now,
+            User.pro_expires_at <= now + timedelta(days=1),
+        )
         res = await session.execute(stmt)
         users = res.scalars().all()
     for user in users:
@@ -388,9 +505,12 @@ async def expiry_tick(bot: Bot) -> None:
 async def admin_stats() -> dict:
     async with async_session() as db:
         now = datetime.utcnow()
+        pro_filter = or_(User.is_admin == True, User.pro_expires_at > now)
+        free_filter = and_(User.is_admin == False, or_(User.pro_expires_at.is_(None), User.pro_expires_at <= now))
         return {
             "users": await db.scalar(select(func.count(User.telegram_id))) or 0,
-            "pro": await db.scalar(select(func.count(User.telegram_id)).where(User.pro_expires_at > now)) or 0,
+            "pro": await db.scalar(select(func.count(User.telegram_id)).where(pro_filter)) or 0,
+            "free": await db.scalar(select(func.count(User.telegram_id)).where(free_filter)) or 0,
             "channels": await db.scalar(select(func.count(Channel.id))) or 0,
             "keywords": await db.scalar(select(func.count(Keyword.id))) or 0,
             "messages": await db.scalar(select(func.count(CaughtMessage.id))) or 0,
@@ -399,14 +519,20 @@ async def admin_stats() -> dict:
         }
 
 
-async def admin_users(offset: int = 0, limit: int = 8) -> list[User]:
+async def admin_users(segment: str, offset: int = 0, limit: int = 8) -> list[User]:
     async with async_session() as db:
-        stmt = select(User).order_by(User.telegram_id.desc()).limit(limit).offset(offset)
+        now = datetime.utcnow()
+        stmt = select(User)
+        if segment == "pro":
+            stmt = stmt.where(or_(User.is_admin == True, User.pro_expires_at > now)).order_by(User.is_admin.desc(), User.telegram_id.desc())
+        else:
+            stmt = stmt.where(User.is_admin == False, or_(User.pro_expires_at.is_(None), User.pro_expires_at <= now)).order_by(User.telegram_id.desc())
+        stmt = stmt.limit(limit).offset(offset)
         res = await db.execute(stmt)
         return list(res.scalars().all())
 
 
-async def admin_user_details(user_id: int) -> tuple[User, int, int]:
+async def admin_user_details(user_id: int) -> tuple[User, int, int, int]:
     async with async_session() as db:
         user = await crud.get_user(db, user_id)
         if not user:
@@ -414,13 +540,14 @@ async def admin_user_details(user_id: int) -> tuple[User, int, int]:
         sources_count = await db.scalar(
             select(func.count(UserChannel.channel_id)).where(UserChannel.user_id == user_id, UserChannel.active == True)
         )
+        keywords_count = await db.scalar(select(func.count(Keyword.id)).where(Keyword.user_id == user_id))
         messages_count = await db.scalar(select(func.count(CaughtMessage.id)).where(CaughtMessage.user_id == user_id))
-        return user, sources_count or 0, messages_count or 0
+        return user, sources_count or 0, keywords_count or 0, messages_count or 0
 
 
 async def admin_toggle_ban(admin_id: int, target_id: int) -> bool:
-    if admin_id == target_id:
-        raise ValueError("Нельзя заблокировать самого себя.")
+    if admin_id == target_id or is_owner_id(target_id):
+        raise ValueError("Владельца нельзя заблокировать.")
     async with async_session() as db:
         user = await crud.get_user(db, target_id)
         if not user:
@@ -431,6 +558,8 @@ async def admin_toggle_ban(admin_id: int, target_id: int) -> bool:
 
 
 async def admin_grant_pro(user_id: int, days: int) -> datetime | None:
+    if is_owner_id(user_id):
+        raise ValueError("У владельца бессрочный PRO по умолчанию.")
     async with async_session() as db:
         user = await crud.get_user(db, user_id)
         if not user:

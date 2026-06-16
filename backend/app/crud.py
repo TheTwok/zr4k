@@ -41,7 +41,7 @@ async def add_user_channel(db: AsyncSession, user_id: int, username: str) -> tup
 
     # 1. Enforce Source Limits
     user_channels = await get_channels_by_user(db, user_id)
-    limit = 100 if user.is_pro else 1
+    limit = 20 if user.is_pro else 1
     if len(user_channels) >= limit:
         raise ValueError(f"Достигнут лимит источников для вашего тарифа ({limit} канал(ов)).")
 
@@ -128,14 +128,17 @@ async def add_keyword(db: AsyncSession, user_id: int, channel_id: int, keyword: 
     if not user:
         raise ValueError("User not found.")
         
-    # Check total keywords count for the user
-    stmt_count = select(func.count(Keyword.id)).where(Keyword.user_id == user_id)
+    # Check keyword count for this source
+    stmt_count = select(func.count(Keyword.id)).where(
+        Keyword.user_id == user_id,
+        Keyword.channel_id == channel_id,
+    )
     res_count = await db.execute(stmt_count)
-    total_keywords = res_count.scalar() or 0
+    source_keywords = res_count.scalar() or 0
     
-    limit = 200 if user.is_pro else 5
-    if total_keywords >= limit:
-        raise ValueError(f"Достигнут лимит ключевых слов для вашего тарифа ({limit} слов).")
+    limit = 20 if user.is_pro else 5
+    if source_keywords >= limit:
+        raise ValueError(f"Достигнут лимит ключевых слов для этого источника ({limit} слов).")
 
     # Prevent duplicates
     stmt_dup = select(Keyword).where(
