@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 from pathlib import Path
 from sqlalchemy.future import select
 from sqlalchemy import func
@@ -88,19 +89,38 @@ def session_file_score(path: Path, session_name: str, phone: str, total_files: i
     return score
 
 
+def session_has_auth_key(path: Path) -> bool:
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            row = conn.execute("select auth_key from sessions limit 1").fetchone()
+            return bool(row and row[0])
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
 def find_session_file(session_name: str, phone: str) -> Path | None:
     expected_name = session_name.removesuffix(".session")
+    files = session_files()
+    if not files:
+        return None
+
+    phone_digits = normalize_phone(phone) or normalize_phone(settings.userbot_phone)
+    if phone_digits:
+        phone_matches = [path for path in files if phone_digits in normalize_phone(path.stem)]
+        if phone_matches:
+            auth_matches = [path for path in phone_matches if session_has_auth_key(path)] or phone_matches
+            return max(auth_matches, key=lambda path: path.stat().st_mtime)
+
     for directory in session_directories():
         path = directory / f"{expected_name}.session"
         if path.exists():
             return path
 
-    files = session_files()
-    if not files:
-        return None
-
-    scored = [(session_file_score(path, expected_name, phone, len(files)), path) for path in files]
-    score, path = max(scored, key=lambda item: item[0])
+    scored = [(session_file_score(path, expected_name, phone, len(files)), path.stat().st_mtime, path) for path in files]
+    score, _, path = max(scored, key=lambda item: (item[0], item[1]))
     return path if score > 0 else None
 
 
