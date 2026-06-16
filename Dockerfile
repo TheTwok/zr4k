@@ -13,5 +13,7 @@ COPY plain_bot/ ./plain_bot/
 USER root
 RUN mkdir -p /app/data && chmod 777 /app/data
 
+EXPOSE 8000
+
 # Command to launch the plain bot, parser, scheduler, and health server
 CMD ["python", "-m", "plain_bot.main"]
