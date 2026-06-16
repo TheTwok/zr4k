@@ -84,7 +84,12 @@ async def require_user_from_callback(callback: CallbackQuery) -> services.User |
 async def show_main(target: Message | CallbackQuery, user: services.User) -> None:
     text = (
         "<b>ZR4K</b>\n"
-        "Текстовый режим управления мониторингом Telegram-каналов.\n\n"
+        "Бот для мониторинга Telegram-каналов в реальном времени и умной ИИ-аналитики.\n\n"
+        "<b>Что вы можете делать:</b>\n"
+        "• Подключать Telegram-каналы как источники.\n"
+        "• Настраивать точные, смысловые и исключающие фильтры.\n"
+        "• Получать найденные совпадения прямо в чат.\n"
+        "• Создавать ручные и автоматические AI-дайджесты.\n\n"
         "Выберите раздел ниже."
     )
     markup = kb.main_menu(services.is_admin(user))
