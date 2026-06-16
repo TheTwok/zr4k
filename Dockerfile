@@ -1,12 +1,3 @@
-# Stage 1: Build the frontend dashboard
-FROM node:20-alpine AS frontend-builder
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm ci
-COPY frontend/ ./
-RUN npm run build
-
-# Stage 2: Build the python app
 FROM python:3.10-slim
 WORKDIR /usr/src/app
 
@@ -14,17 +5,13 @@ WORKDIR /usr/src/app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend application code and runner scripts
+# Copy backend application code and the plain Telegram bot interface
 COPY backend/ ./backend/
-COPY run.py .
-COPY run_tunnel.py .
-
-# Copy the compiled frontend static files from Stage 1
-COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+COPY plain_bot/ ./plain_bot/
 
 # Ensure the persistent data directory exists and is writable
 USER root
 RUN mkdir -p /app/data && chmod 777 /app/data
 
-# Command to launch the services
-CMD ["python", "run.py"]
+# Command to launch the plain bot, parser, scheduler, and health server
+CMD ["python", "-m", "plain_bot.main"]

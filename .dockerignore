@@ -15,11 +15,24 @@ backend/sessions/
 *.session-journal
 
 # Local frontend artifacts are rebuilt inside Docker.
+frontend/
 frontend/node_modules/
 frontend/dist/
 frontend/dist-ssr/
+
+# Obsolete Mini App entrypoints.
+run.py
+run_tunnel.py
+setup_env.ps1
+backend/bot.py
+backend/migrate.py
+backend/app/auth.py
+backend/app/main.py
+backend/app/schemas.py
+backend/app/tasks.py
 
 # Local tunnel/download artifacts.
 backend/cloudflared.exe
 ngrok.zip
 cert.der
+.tmp_emoji_session/

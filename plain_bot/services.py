@@ -1,0 +1,479 @@
+from __future__ import annotations
+
+import re
+from datetime import datetime, timedelta, timezone
+from html import escape
+from zoneinfo import ZoneInfo
+
+from aiogram import Bot
+from aiogram.types import User as TelegramUser
+from sqlalchemy import delete, func, select
+
+from backend.app import crud
+from backend.app.config import settings
+from backend.app.database import Base, async_session, engine, ensure_db_exists
+from backend.app.digest import generate_summary
+from backend.app.models import (
+    AIUsageStat,
+    CaughtMessage,
+    Channel,
+    Keyword,
+    Payment,
+    Promocode,
+    User,
+    UserChannel,
+    UserbotSession,
+)
+from backend.parser import fetch_history_direct, handle_control_action
+
+
+MODE_LABELS = {
+    "semantic": "Смысловой",
+    "exact_phrase": "Точная фраза",
+    "exact_word": "Точное слово",
+    "exclude": "Исключение",
+}
+
+DAY_PRESETS = {
+    "all": ("Каждый день", "ПН,ВТ,СР,ЧТ,ПТ,СБ,ВС"),
+    "work": ("Будни", "ПН,ВТ,СР,ЧТ,ПТ"),
+    "weekend": ("Выходные", "СБ,ВС"),
+}
+
+
+def clean_username(value: str) -> str:
+    value = value.strip()
+    if "/joinchat/" in value or "t.me/+" in value or "/+" in value or "joinchat" in value:
+        raise ValueError("Поддерживаются только публичные каналы без invite-ссылок.")
+
+    link_match = re.match(
+        r"^(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/?@?([a-zA-Z0-9_]{4,32})/?$",
+        value,
+        re.IGNORECASE,
+    )
+    if link_match:
+        return link_match.group(1).lower()
+
+    raw_match = re.match(r"^@?([a-zA-Z0-9_]{4,32})$", value)
+    if raw_match:
+        return raw_match.group(1).lower()
+
+    raise ValueError("Неверный формат. Используйте @username или t.me/username.")
+
+
+def error_text(exc: Exception) -> str:
+    text = str(exc).strip()
+    if not text:
+        return "Операция не выполнена."
+    if "Р" in text or "С" in text:
+        return "Операция не выполнена. Проверьте данные, лимиты тарифа или повторите позже."
+    return text
+
+
+def clip(text: str | None, limit: int = 900) -> str:
+    if not text:
+        return ""
+    text = str(text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def dt_text(value: datetime | None) -> str:
+    if not value:
+        return "нет"
+    return value.strftime("%d.%m.%Y %H:%M")
+
+
+def is_admin(user: User | None) -> bool:
+    if not user:
+        return False
+    return bool(user.is_admin or user.telegram_id == settings.admin_user_id)
+
+
+async def init_storage() -> None:
+    await ensure_db_exists()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    if settings.admin_user_id:
+        async with async_session() as db:
+            stmt = select(User).where(User.telegram_id == settings.admin_user_id)
+            res = await db.execute(stmt)
+            admin = res.scalar_one_or_none()
+            if not admin:
+                admin = User(
+                    telegram_id=settings.admin_user_id,
+                    username="admin",
+                    language_code="ru",
+                    is_admin=True,
+                    timezone="Europe/Moscow",
+                )
+                db.add(admin)
+            else:
+                admin.is_admin = True
+            await db.commit()
+
+
+async def ensure_user(tg_user: TelegramUser) -> User:
+    async with async_session() as db:
+        user = await crud.get_user(db, tg_user.id)
+        if not user:
+            user = await crud.create_user(
+                db,
+                user_id=tg_user.id,
+                username=tg_user.username,
+                language_code=tg_user.language_code or "ru",
+            )
+        changed = False
+        if user.username != tg_user.username:
+            user.username = tg_user.username
+            changed = True
+        language_code = tg_user.language_code or user.language_code or "ru"
+        if user.language_code != language_code:
+            user.language_code = language_code
+            changed = True
+        if tg_user.id == settings.admin_user_id and not user.is_admin:
+            user.is_admin = True
+            changed = True
+        if changed:
+            await db.commit()
+            await db.refresh(user)
+        return user
+
+
+async def get_user(user_id: int) -> User | None:
+    async with async_session() as db:
+        return await crud.get_user(db, user_id)
+
+
+async def overview(user_id: int) -> dict:
+    async with async_session() as db:
+        user = await crud.get_user(db, user_id)
+        sources_count = await db.scalar(
+            select(func.count(UserChannel.channel_id)).where(
+                UserChannel.user_id == user_id,
+                UserChannel.active == True,
+            )
+        )
+        keywords_count = await db.scalar(select(func.count(Keyword.id)).where(Keyword.user_id == user_id))
+        messages_count = await db.scalar(select(func.count(CaughtMessage.id)).where(CaughtMessage.user_id == user_id))
+        return {
+            "user": user,
+            "sources": sources_count or 0,
+            "keywords": keywords_count or 0,
+            "messages": messages_count or 0,
+        }
+
+
+async def list_sources(user_id: int) -> list[Channel]:
+    async with async_session() as db:
+        return await crud.get_channels_by_user(db, user_id)
+
+
+async def add_source(user_id: int, link: str) -> Channel:
+    username = clean_username(link)
+    async with async_session() as db:
+        channel, is_new_globally = await crud.add_user_channel(db, user_id, username)
+    if is_new_globally:
+        await handle_control_action({"action": "join", "username": channel.username, "channel_id": channel.id})
+    return channel
+
+
+async def remove_source(user_id: int, channel_id: int) -> str:
+    async with async_session() as db:
+        stmt = select(Channel).where(Channel.id == channel_id)
+        res = await db.execute(stmt)
+        channel = res.scalar_one_or_none()
+        if not channel:
+            raise ValueError("Источник не найден.")
+        username = channel.username
+        should_leave = await crud.remove_user_channel(db, user_id, channel_id)
+    if should_leave:
+        await handle_control_action({"action": "leave", "username": username, "channel_id": channel_id})
+    return username
+
+
+async def list_keywords(user_id: int, channel_id: int) -> tuple[Channel, list[Keyword]]:
+    async with async_session() as db:
+        stmt = (
+            select(Channel)
+            .join(UserChannel, UserChannel.channel_id == Channel.id)
+            .where(
+                Channel.id == channel_id,
+                UserChannel.user_id == user_id,
+                UserChannel.active == True,
+            )
+        )
+        res = await db.execute(stmt)
+        channel = res.scalar_one_or_none()
+        if not channel:
+            raise ValueError("Источник не найден.")
+        keywords = await crud.get_keywords(db, user_id, channel_id)
+        return channel, keywords
+
+
+async def add_keyword(user_id: int, channel_id: int, keyword: str, mode: str) -> Keyword:
+    keyword = keyword.strip()
+    if not keyword:
+        raise ValueError("Введите непустое слово или фразу.")
+    async with async_session() as db:
+        stmt = select(UserChannel).where(
+            UserChannel.user_id == user_id,
+            UserChannel.channel_id == channel_id,
+            UserChannel.active == True,
+        )
+        res = await db.execute(stmt)
+        if not res.scalar_one_or_none():
+            raise ValueError("Источник не найден.")
+        return await crud.add_keyword(db, user_id, channel_id, keyword, mode)
+
+
+async def delete_keyword(user_id: int, keyword_id: int) -> bool:
+    async with async_session() as db:
+        return await crud.delete_keyword(db, user_id, keyword_id)
+
+
+async def generate_digest(user_id: int, period_hours: int) -> str:
+    async with async_session() as db:
+        user = await crud.get_user(db, user_id)
+        if not user or not user.is_pro:
+            raise ValueError("Дайджест доступен только на PRO.")
+        now = datetime.utcnow()
+        if user.last_digest_at and not is_admin(user):
+            wait_time = user.last_digest_at + timedelta(hours=4) - now
+            if wait_time > timedelta(0):
+                minutes_left = max(1, int(wait_time.total_seconds() / 60))
+                raise ValueError(f"Следующий ручной дайджест будет доступен через {minutes_left} мин.")
+
+        stmt = (
+            select(Channel)
+            .join(UserChannel, Channel.id == UserChannel.channel_id)
+            .where(
+                UserChannel.user_id == user_id,
+                UserChannel.active == True,
+            )
+        )
+        res = await db.execute(stmt)
+        channels = res.scalars().all()
+        channels_data = [{"username": c.username, "session_id": c.userbot_session_id} for c in channels if c.userbot_session_id]
+
+    if not channels_data:
+        return "Нет подключенных источников для парсинга."
+
+    messages_texts = await fetch_history_direct(channels_data, period_hours)
+    if not messages_texts:
+        return "За выбранный период сообщений не найдено."
+
+    digest_text = await generate_summary(messages_texts)
+
+    async with async_session() as db:
+        user = await crud.get_user(db, user_id)
+        if user:
+            user.last_digest_at = datetime.utcnow()
+        await db.commit()
+
+    return digest_text
+
+
+async def set_schedule(user_id: int, channel_id: int, time_value: str | None, days: str | None = None) -> None:
+    async with async_session() as db:
+        stmt = select(UserChannel).where(
+            UserChannel.user_id == user_id,
+            UserChannel.channel_id == channel_id,
+            UserChannel.active == True,
+        )
+        res = await db.execute(stmt)
+        user_channel = res.scalar_one_or_none()
+        if not user_channel:
+            raise ValueError("Источник не найден.")
+        user_channel.digest_schedule_time = time_value
+        user_channel.digest_schedule_days = days
+        await db.commit()
+
+
+async def activate_promo(user_id: int, code: str) -> User:
+    async with async_session() as db:
+        return await crud.activate_promocode(db, user_id, code.strip())
+
+
+async def save_payment(user_id: int, amount: int) -> None:
+    async with async_session() as db:
+        user = await crud.get_user(db, user_id)
+        if not user:
+            return
+        now = datetime.utcnow()
+        if user.pro_expires_at and user.pro_expires_at > now:
+            user.pro_expires_at = user.pro_expires_at + timedelta(days=30)
+        else:
+            user.pro_expires_at = now + timedelta(days=30)
+        user.stars_income = (user.stars_income or 0) + amount
+        db.add(Payment(user_id=user_id, amount=amount))
+        await db.commit()
+
+
+async def scheduled_digest_tick(bot: Bot) -> None:
+    now = datetime.utcnow()
+    async with async_session() as session:
+        stmt = (
+            select(UserChannel, Channel, User)
+            .join(Channel, UserChannel.channel_id == Channel.id)
+            .join(User, UserChannel.user_id == User.telegram_id)
+            .where(
+                UserChannel.active == True,
+                UserChannel.digest_schedule_time.isnot(None),
+                User.pro_expires_at > now,
+            )
+        )
+        res = await session.execute(stmt)
+        rows = res.all()
+
+    for user_channel, channel, user in rows:
+        tz_str = user.timezone or "Europe/Moscow"
+        try:
+            user_tz = ZoneInfo(tz_str)
+        except Exception:
+            user_tz = ZoneInfo("Europe/Moscow")
+
+        local_now = now.replace(tzinfo=timezone.utc).astimezone(user_tz)
+        if user_channel.digest_schedule_time != f"{local_now.hour:02d}:00":
+            continue
+
+        local_day = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"][local_now.weekday()]
+        enabled_days = [d.strip().upper() for d in (user_channel.digest_schedule_days or DAY_PRESETS["all"][1]).split(",")]
+        if local_day not in enabled_days:
+            continue
+
+        try:
+            async with async_session() as session:
+                time_limit = now - timedelta(hours=24)
+                msg_stmt = select(CaughtMessage.text).where(
+                    CaughtMessage.user_id == user.telegram_id,
+                    CaughtMessage.channel_id == channel.id,
+                    CaughtMessage.created_at >= time_limit,
+                )
+                msg_res = await session.execute(msg_stmt)
+                messages = msg_res.scalars().all()
+                if not messages:
+                    continue
+                messages_texts = [{"channel": channel.title or f"@{channel.username}", "text": text} for text in messages]
+                digest_text = await generate_summary(messages_texts, db=session)
+                db_user = await crud.get_user(session, user.telegram_id)
+                if db_user:
+                    db_user.last_digest_at = now
+                await session.commit()
+            await bot.send_message(
+                user.telegram_id,
+                f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{escape(digest_text)}",
+            )
+        except Exception:
+            continue
+
+
+async def expiry_tick(bot: Bot) -> None:
+    now = datetime.utcnow()
+    async with async_session() as session:
+        stmt = select(User).where(User.pro_expires_at >= now, User.pro_expires_at <= now + timedelta(days=1))
+        res = await session.execute(stmt)
+        users = res.scalars().all()
+    for user in users:
+        try:
+            await bot.send_message(
+                user.telegram_id,
+                "Подписка PRO истекает меньше чем через 24 часа. Продлите ее в разделе PRO.",
+            )
+        except Exception:
+            continue
+
+
+async def admin_stats() -> dict:
+    async with async_session() as db:
+        now = datetime.utcnow()
+        return {
+            "users": await db.scalar(select(func.count(User.telegram_id))) or 0,
+            "pro": await db.scalar(select(func.count(User.telegram_id)).where(User.pro_expires_at > now)) or 0,
+            "channels": await db.scalar(select(func.count(Channel.id))) or 0,
+            "keywords": await db.scalar(select(func.count(Keyword.id))) or 0,
+            "messages": await db.scalar(select(func.count(CaughtMessage.id))) or 0,
+            "income": await db.scalar(select(func.sum(User.stars_income))) or 0,
+            "ai_calls": await db.scalar(select(func.count(AIUsageStat.id))) or 0,
+        }
+
+
+async def admin_users(offset: int = 0, limit: int = 8) -> list[User]:
+    async with async_session() as db:
+        stmt = select(User).order_by(User.telegram_id.desc()).limit(limit).offset(offset)
+        res = await db.execute(stmt)
+        return list(res.scalars().all())
+
+
+async def admin_user_details(user_id: int) -> tuple[User, int, int]:
+    async with async_session() as db:
+        user = await crud.get_user(db, user_id)
+        if not user:
+            raise ValueError("Пользователь не найден.")
+        sources_count = await db.scalar(
+            select(func.count(UserChannel.channel_id)).where(UserChannel.user_id == user_id, UserChannel.active == True)
+        )
+        messages_count = await db.scalar(select(func.count(CaughtMessage.id)).where(CaughtMessage.user_id == user_id))
+        return user, sources_count or 0, messages_count or 0
+
+
+async def admin_toggle_ban(admin_id: int, target_id: int) -> bool:
+    if admin_id == target_id:
+        raise ValueError("Нельзя заблокировать самого себя.")
+    async with async_session() as db:
+        user = await crud.get_user(db, target_id)
+        if not user:
+            raise ValueError("Пользователь не найден.")
+        user.is_banned = not user.is_banned
+        await db.commit()
+        return user.is_banned
+
+
+async def admin_grant_pro(user_id: int, days: int) -> datetime | None:
+    async with async_session() as db:
+        user = await crud.get_user(db, user_id)
+        if not user:
+            raise ValueError("Пользователь не найден.")
+        now = datetime.utcnow()
+        if days <= 0:
+            user.pro_expires_at = None
+        elif user.pro_expires_at and user.pro_expires_at > now:
+            user.pro_expires_at += timedelta(days=days)
+        else:
+            user.pro_expires_at = now + timedelta(days=days)
+        await db.commit()
+        return user.pro_expires_at
+
+
+async def admin_reset_cooldown(user_id: int) -> None:
+    async with async_session() as db:
+        user = await crud.get_user(db, user_id)
+        if not user:
+            raise ValueError("Пользователь не найден.")
+        user.last_digest_at = None
+        await db.commit()
+
+
+async def admin_promos() -> list[Promocode]:
+    async with async_session() as db:
+        res = await db.execute(select(Promocode))
+        return list(res.scalars().all())
+
+
+async def admin_create_promo(code: str, days: int, uses: int) -> Promocode:
+    async with async_session() as db:
+        return await crud.create_promocode(db, code.strip(), days, uses)
+
+
+async def admin_delete_promo(code: str) -> bool:
+    async with async_session() as db:
+        res = await db.execute(delete(Promocode).where(Promocode.code == code))
+        await db.commit()
+        return res.rowcount > 0
+
+
+async def admin_sessions() -> list[UserbotSession]:
+    async with async_session() as db:
+        res = await db.execute(select(UserbotSession))
+        return list(res.scalars().all())

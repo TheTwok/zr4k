@@ -20,12 +20,25 @@ backend/cloudflared.exe
 ngrok.zip
 
 # Frontend
+frontend/
 frontend/node_modules/
 frontend/dist/
 frontend/dist-ssr/
+
+# Obsolete Mini App entrypoints kept out of the plain-bot repository
+run.py
+run_tunnel.py
+setup_env.ps1
+backend/bot.py
+backend/migrate.py
+backend/app/auth.py
+backend/app/main.py
+backend/app/schemas.py
+backend/app/tasks.py
 
 # Editors and system files
 .vscode/
 .idea/
 .DS_Store
 *.log
+.tmp_emoji_session/
