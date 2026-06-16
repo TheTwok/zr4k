@@ -2,16 +2,18 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 ICONS = {
-    "overview": "6028435952299413210",
-    "cabinet": "6028435952299413210",
-    "sources": "6037475557082403885",
-    "filters": "5904258298764334001",
-    "digest": "5895519358871932592",
+    "overview": "5879770735999717115",
+    "cabinet": "5879770735999717115",
+    "sources": "6005909802314633125",
+    "source_item": "5888620056551625531",
+    "filters": "6039779802741739617",
+    "digest": "6035162669948867129",
     "pro": "6028338546736107668",
     "crown": "6028338546736107668",
     "help": "6030848053177486888",
     "admin": "6030537007350944596",
     "add": "6032924188828767321",
+    "add_source": "6028171274939797252",
     "list": "6034969813032374911",
     "delete": "6039522349517115015",
     "back": "6039539366177541657",
@@ -19,16 +21,16 @@ ICONS = {
     "disable": "6030757850274336631",
     "pay": "6028338546736107668",
     "promo": "5773677501825945508",
-    "schedule": "5904258298764334001",
-    "generate": "5774022692642492953",
-    "settings": "5904258298764334001",
+    "schedule": "5778605968208170641",
+    "generate": "6035162669948867129",
+    "settings": "6039779802741739617",
     "stats": "5877485980901971030",
     "users": "5879770735999717115",
     "sessions": "6037249452824072506",
     "next": "5895383238473421210",
     "refresh": "6030657343744644592",
     "done": "6030657343744644592",
-    "select": "6037475557082403885",
+    "select": "5888620056551625531",
 }
 
 
@@ -77,9 +79,9 @@ def cabinet_menu(is_pro: bool, is_owner: bool = False) -> InlineKeyboardMarkup:
 def sources_menu() -> InlineKeyboardMarkup:
     return keyboard(
         [
-            [button("Добавить источник", "src:add", style="success", icon="add")],
+            [button("Добавить источник", "src:add", style="success", icon="add_source")],
             [button("Перейти к фильтрам", "m:filters", style="primary", icon="filters")],
-            [button("Удалить источник", "src:del", style="danger", icon="delete")],
+            [button("Удалить источник", "src:del", style="danger", icon="cancel")],
             [button("В главное меню", "m:main", icon="back")],
         ]
     )
@@ -96,7 +98,7 @@ def digest_menu(is_pro: bool) -> InlineKeyboardMarkup:
 
 
 def digest_sources_menu(sources: list) -> InlineKeyboardMarkup:
-    rows = [[button(f"@{source.username}", f"dig:source:{source.id}", style="primary", icon="sources")] for source in sources]
+    rows = [[button(f"@{source.username}", f"dig:source:{source.id}", style="primary", icon="source_item")] for source in sources]
     rows.append([button("В главное меню", "m:main", icon="back")])
     return keyboard(rows)
 

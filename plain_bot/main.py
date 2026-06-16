@@ -301,7 +301,7 @@ async def source_delete_menu(callback: CallbackQuery) -> None:
         await safe_edit(callback, "<b>Удаление источника</b>\nНет активных источников.", kb.sources_menu())
         await callback.answer()
         return
-    rows = [[kb.button(f"@{source.username}", f"src:rm:{source.id}", style="danger", icon="delete")] for source in sources]
+    rows = [[kb.button(f"@{source.username}", f"src:rm:{source.id}", style="danger", icon="source_item")] for source in sources]
     rows.append([kb.button("Назад", "m:sources", icon="back")])
     await safe_edit(callback, "<b>Удаление источника</b>\nВыберите источник.", kb.keyboard(rows))
     await callback.answer()
@@ -335,7 +335,7 @@ async def menu_filters(callback: CallbackQuery) -> None:
         )
         await callback.answer()
         return
-    rows = [[kb.button(f"@{source.username}", f"flt:c:{source.id}", style="primary", icon="sources")] for source in sources]
+    rows = [[kb.button(f"@{source.username}", f"flt:c:{source.id}", style="primary", icon="source_item")] for source in sources]
     rows.append([kb.button("В главное меню", "m:main", icon="back")])
     await safe_edit(callback, "<b>Фильтры</b>\nВыберите источник.", kb.keyboard(rows))
     await callback.answer()
@@ -584,10 +584,10 @@ async def digest_generate_period(callback: CallbackQuery, state: FSMContext) -> 
         text = await services.generate_digest(user.telegram_id, hours, [channel_id])
         await callback.message.answer(
             f"<b>Дайджест за {hours} ч.</b>\n\n{escape(text)}",
-            reply_markup=kb.digest_source_actions(channel_id),
         )
+        await safe_edit(callback, "Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_source_actions(channel_id))
     except Exception as exc:
-        await callback.message.answer(f"Не удалось создать дайджест: {escape(services.error_text(exc))}", reply_markup=kb.digest_source_actions(channel_id))
+        await safe_edit(callback, f"Не удалось создать дайджест: {escape(services.error_text(exc))}", kb.digest_source_actions(channel_id))
 
 
 @router.callback_query(F.data.startswith("dig:src:"))
@@ -636,10 +636,10 @@ async def digest_generate_finish(callback: CallbackQuery, state: FSMContext) -> 
         text = await services.generate_digest(user.telegram_id, hours, channel_ids)
         await callback.message.answer(
             f"<b>Дайджест за {hours} ч.</b>\n\n{escape(text)}",
-            reply_markup=kb.digest_menu(True),
         )
+        await safe_edit(callback, "Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_menu(True))
     except Exception as exc:
-        await callback.message.answer(f"Не удалось создать дайджест: {escape(services.error_text(exc))}", reply_markup=kb.digest_menu(user.is_pro))
+        await safe_edit(callback, f"Не удалось создать дайджест: {escape(services.error_text(exc))}", kb.digest_menu(user.is_pro))
 
 
 @router.callback_query(F.data == "dig:sched")
@@ -669,7 +669,7 @@ async def schedule_sources(callback: CallbackQuery, state: FSMContext) -> None:
         "<b>Текущие настройки</b>",
     ]
     lines.extend(configured or ["Пока нет настроенных ежедневных дайджестов."])
-    rows = [[kb.button(f"@{source.username}", f"sch:c:{source.id}", style="primary", icon="sources")] for source in sources]
+    rows = [[kb.button(f"@{source.username}", f"sch:c:{source.id}", style="primary", icon="source_item")] for source in sources]
     rows.append([kb.button("Назад", "m:digest", icon="back")])
     await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
     await callback.answer()
@@ -1088,8 +1088,12 @@ async def admin_sessions(callback: CallbackQuery) -> None:
     sessions = await services.admin_sessions()
     lines = ["<b>Сессии парсера</b>"]
     if sessions:
-        for session in sessions:
-            lines.append(f"{escape(session.session_name)} · {escape(session.phone)} · {'активна' if session.is_active else 'выключена'}")
+        for index, session in enumerate(sessions, start=1):
+            if index > 1:
+                lines.append("")
+            status = "Сессия активна" if session.is_active else "Сессия выключена"
+            lines.append(f"{index}. Номер: <code>{escape(session.phone)}</code>")
+            lines.append(status)
     else:
         lines.append("Сессий нет.")
     await safe_edit(callback, "\n".join(lines), kb.admin_menu())
