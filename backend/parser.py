@@ -214,6 +214,7 @@ async def run_client(session_id: int, phone: str, session_name: str, api_id: int
             await client.disconnect()
         except Exception:
             pass
+        clients.pop(session_id, None)
 
 async def fetch_history_direct(channels_data: list, hours: int) -> list:
     from datetime import datetime, timedelta, timezone
