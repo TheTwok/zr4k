@@ -66,6 +66,13 @@ async def safe_edit(callback: CallbackQuery, text: str, reply_markup=None) -> No
         await callback.message.answer(text, reply_markup=reply_markup, disable_web_page_preview=True)
 
 
+def schedule_label(time_value: str | None, days_value: str | None) -> str:
+    if not time_value:
+        return "не настроено"
+    day_label = next((label for label, days in services.DAY_PRESETS.values() if days == days_value), None)
+    return f"{time_value}, {day_label or 'каждый день'}"
+
+
 async def require_user_from_message(message: Message) -> services.User | None:
     user = await services.ensure_user(message.from_user)
     if user.is_banned:
@@ -499,16 +506,46 @@ async def menu_digest(callback: CallbackQuery, state: FSMContext) -> None:
         )
         await callback.answer()
         return
-    text = (
+    sources = await services.list_sources(user.telegram_id)
+    if not sources:
+        await safe_edit(
+            callback,
+            "<b>Дайджест</b>\n"
+            "Сначала добавьте источник, чтобы генерировать или настроить ежедневный дайджест.",
+            kb.back_main(),
+        )
+        await callback.answer()
+        return
+    await safe_edit(
+        callback,
         "<b>Дайджест</b>\n"
-        "Выберите период, затем отметьте до 5 источников для генерации.\n"
-        "Если сообщений много, бот аккуратно сжимает входные данные и ограничивает итоговую сводку."
+        "Выберите источник, затем сгенерируйте дайджест сейчас или укажите время ежедневной отправки.",
+        kb.digest_sources_menu(sources),
     )
-    await safe_edit(callback, text, kb.digest_menu(True))
     await callback.answer()
 
 
-@router.callback_query(F.data == "dig:g")
+@router.callback_query(F.data.startswith("dig:source:"))
+async def digest_source(callback: CallbackQuery) -> None:
+    user = await require_user_from_callback(callback)
+    if not user:
+        return
+    channel_id = int(callback.data.split(":")[2])
+    source = next((item for item in await services.list_sources(user.telegram_id) if item.id == channel_id), None)
+    if not source:
+        await safe_edit(callback, "<b>Дайджест</b>\nИсточник не найден.", kb.back_main())
+        await callback.answer()
+        return
+    await safe_edit(
+        callback,
+        f"<b>Дайджест: @{escape(source.username)}</b>\n"
+        f"Расписание: {escape(schedule_label(source.digest_schedule_time, source.digest_schedule_days))}.",
+        kb.digest_source_actions(channel_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:g"))
 async def digest_generate_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     user = await require_user_from_callback(callback)
@@ -518,31 +555,39 @@ async def digest_generate_start(callback: CallbackQuery, state: FSMContext) -> N
         await safe_edit(callback, "<b>Дайджест</b>\nДля генерации нужна подписка PRO.", kb.digest_locked_menu())
         await callback.answer()
         return
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await safe_edit(callback, "<b>Дайджест</b>\nВыберите источник.", kb.digest_sources_menu(await services.list_sources(user.telegram_id)))
+        await callback.answer()
+        return
+    await state.update_data(digest_channel_id=int(parts[2]))
     await safe_edit(callback, "<b>Период дайджеста</b>\nВыберите интервал.", kb.period_menu())
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dig:p:"))
-async def digest_select_sources(callback: CallbackQuery, state: FSMContext) -> None:
+async def digest_generate_period(callback: CallbackQuery, state: FSMContext) -> None:
     user = await require_user_from_callback(callback)
     if not user:
         return
     hours = int(callback.data.split(":")[2])
-    sources = await services.list_digest_sources(user.telegram_id)
-    if not sources:
-        await safe_edit(callback, "<b>Дайджест</b>\nНет источников, подключенных к парсеру.", kb.digest_menu(user.is_pro))
+    data = await state.get_data()
+    channel_id = int(data.get("digest_channel_id") or 0)
+    if not channel_id:
+        await safe_edit(callback, "<b>Дайджест</b>\nСначала выберите источник.", kb.digest_sources_menu(await services.list_sources(user.telegram_id)))
         await callback.answer()
         return
-    selected = {source.id for source in sources[: min(len(sources), services.DIGEST_MAX_SOURCES)]}
-    await state.update_data(digest_hours=hours, digest_sources=list(selected))
-    await safe_edit(
-        callback,
-        f"<b>Источники дайджеста</b>\n"
-        f"Период: {hours} ч.\n"
-        f"Выберите от 1 до {services.DIGEST_MAX_SOURCES} источников. Сейчас выбрано: {len(selected)}.",
-        kb.digest_source_menu(sources, selected, bool(selected)),
-    )
+    await state.clear()
+    await safe_edit(callback, "Готовлю дайджест. Это может занять до минуты.", None)
     await callback.answer()
+    try:
+        text = await services.generate_digest(user.telegram_id, hours, [channel_id])
+        await callback.message.answer(
+            f"<b>Дайджест за {hours} ч.</b>\n\n{escape(text)}",
+            reply_markup=kb.digest_source_actions(channel_id),
+        )
+    except Exception as exc:
+        await callback.message.answer(f"Не удалось создать дайджест: {escape(services.error_text(exc))}", reply_markup=kb.digest_source_actions(channel_id))
 
 
 @router.callback_query(F.data.startswith("dig:src:"))
@@ -612,9 +657,21 @@ async def schedule_sources(callback: CallbackQuery, state: FSMContext) -> None:
         await safe_edit(callback, "<b>Ежедневный дайджест</b>\nСначала добавьте источник.", kb.schedule_menu())
         await callback.answer()
         return
+    configured = [
+        f"@{escape(source.username)} — {escape(schedule_label(source.digest_schedule_time, source.digest_schedule_days))}"
+        for source in sources
+        if source.digest_schedule_time
+    ]
+    lines = [
+        "<b>Расписание</b>",
+        "Выберите источник, затем укажите время, когда хотите получать ежедневный дайджест.",
+        "",
+        "<b>Текущие настройки</b>",
+    ]
+    lines.extend(configured or ["Пока нет настроенных ежедневных дайджестов."])
     rows = [[kb.button(f"@{source.username}", f"sch:c:{source.id}", style="primary", icon="sources")] for source in sources]
     rows.append([kb.button("Назад", "m:digest", icon="back")])
-    await safe_edit(callback, "<b>Расписание</b>\nВыберите источник.", kb.keyboard(rows))
+    await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
     await callback.answer()
 
 
@@ -624,18 +681,25 @@ async def schedule_time(callback: CallbackQuery, state: FSMContext) -> None:
     if not user:
         return
     channel_id = int(callback.data.split(":")[2])
+    source = next((item for item in await services.list_sources(user.telegram_id) if item.id == channel_id), None)
+    if not source:
+        await safe_edit(callback, "<b>Ежедневный дайджест</b>\nИсточник не найден.", kb.schedule_menu())
+        await callback.answer()
+        return
     await state.set_state(ScheduleStates.waiting_time)
     await state.update_data(schedule_channel_id=channel_id)
-    rows = [
-        [kb.button("Отключить", f"sch:off:{channel_id}", style="danger", icon="disable")],
-        [kb.button("Назад", "dig:sched", icon="back")],
-    ]
+    rows = []
+    if source.digest_schedule_time:
+        rows.append([kb.button("Отключить", f"sch:off:{channel_id}", style="danger", icon="disable")])
+    rows.append([kb.button("Назад", "dig:sched", icon="back")])
+    current = schedule_label(source.digest_schedule_time, source.digest_schedule_days)
     await safe_edit(
         callback,
-        "<b>Ежедневный дайджест</b>\n"
+        f"<b>Ежедневный дайджест: @{escape(source.username)}</b>\n"
+        f"Расписание: {escape(current)}.\n\n"
         "Отправьте сообщением время, когда хотите получать ежедневную рассылку.\n\n"
-        "Формат: <code>09:32</code>\n"
-        "Время указывается по часовому поясу аккаунта.",
+        "Формат: <code>XX:XX</code>\n"
+        "Время указывается по часовому поясу вашего аккаунта.",
         kb.keyboard(rows),
     )
     await callback.answer()
@@ -649,7 +713,7 @@ async def schedule_time_received(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", value)
     if not match:
-        await message.answer("Отправьте время в формате HH:MM, например 09:32.", reply_markup=kb.cancel_menu())
+        await message.answer("Отправьте время в формате XX:XX. Время указывается по часовому поясу вашего аккаунта.", reply_markup=kb.cancel_menu())
         return
     data = await state.get_data()
     channel_id = int(data["schedule_channel_id"])

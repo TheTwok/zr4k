@@ -463,11 +463,29 @@ async def scheduled_digest_tick(bot: Bot) -> None:
                 msg_res = await session.execute(msg_stmt)
                 messages = msg_res.scalars().all()
                 if not messages:
+                    digest_text = "За последние 24 часа сообщений не найдено."
+                    db_user = await crud.get_user(session, user.telegram_id)
+                    if db_user:
+                        db_user.last_digest_at = now
+                    await session.commit()
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_text}",
+                    )
                     continue
                 messages_texts = prepare_digest_messages(
                     [{"channel": channel.title or f"@{channel.username}", "text": text} for text in messages]
                 )
                 if not messages_texts:
+                    digest_text = "За последние 24 часа нет подходящих текстовых сообщений."
+                    db_user = await crud.get_user(session, user.telegram_id)
+                    if db_user:
+                        db_user.last_digest_at = now
+                    await session.commit()
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_text}",
+                    )
                     continue
                 digest_text = clip_digest(await generate_summary(messages_texts, db=session))
                 db_user = await crud.get_user(session, user.telegram_id)

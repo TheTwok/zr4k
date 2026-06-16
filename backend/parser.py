@@ -3,6 +3,8 @@ import sys
 import asyncio
 import json
 import logging
+import re
+from pathlib import Path
 from sqlalchemy.future import select
 from sqlalchemy import func
 from telethon import TelegramClient, events
@@ -28,6 +30,7 @@ logger = logging.getLogger("zr4k.parser")
 clients = {}
 monitored_channels = {}
 monitored_peer_ids = {}
+failed_session_ids = set()
 
 bot = None
 token = settings.telegram_bot_token
@@ -39,6 +42,116 @@ if token and token != "YOUR_BOT_TOKEN_HERE" and ":" in token:
 redis_client = None
 
 
+def normalize_phone(value: str | None) -> str:
+    return re.sub(r"\D+", "", value or "")
+
+
+def session_directories() -> list[Path]:
+    base_dir = Path(__file__).resolve().parent
+    paths = []
+    if Path("/app/data").exists():
+        paths.extend([Path("/app/data/sessions"), Path("/app/data")])
+    paths.append(base_dir / "sessions")
+
+    result = []
+    seen = set()
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            result.append(path)
+            seen.add(key)
+    return result
+
+
+def session_files() -> list[Path]:
+    files = []
+    for directory in session_directories():
+        if not directory.exists():
+            continue
+        files.extend(path for path in directory.iterdir() if path.is_file() and path.name.endswith(".session"))
+    return files
+
+
+def session_file_score(path: Path, session_name: str, phone: str, total_files: int) -> int:
+    stem = path.stem.lower()
+    expected = session_name.removesuffix(".session").lower()
+    phone_digits = normalize_phone(phone)
+    score = 0
+    if stem == expected:
+        score += 100
+    elif expected and (expected in stem or stem in expected):
+        score += 70
+    if phone_digits and phone_digits in normalize_phone(stem):
+        score += 80
+    if total_files == 1:
+        score += 40
+    return score
+
+
+def find_session_file(session_name: str, phone: str) -> Path | None:
+    expected_name = session_name.removesuffix(".session")
+    for directory in session_directories():
+        path = directory / f"{expected_name}.session"
+        if path.exists():
+            return path
+
+    files = session_files()
+    if not files:
+        return None
+
+    scored = [(session_file_score(path, expected_name, phone, len(files)), path) for path in files]
+    score, path = max(scored, key=lambda item: item[0])
+    return path if score > 0 else None
+
+
+def resolve_session_base(session_name: str, phone: str) -> str:
+    existing = find_session_file(session_name, phone)
+    if existing:
+        expected = session_name.removesuffix(".session")
+        if existing.stem != expected:
+            logger.warning("Using uploaded session file %s for DB session %s.", existing.name, expected)
+        return str(existing.with_suffix(""))
+
+    primary_dir = session_directories()[0]
+    primary_dir.mkdir(parents=True, exist_ok=True)
+    return str(primary_dir / session_name.removesuffix(".session"))
+
+
+def infer_phone_from_session_file(path: Path) -> str:
+    phone = normalize_phone(settings.userbot_phone)
+    if phone:
+        return f"+{phone}"
+    match = re.search(r"(\d{10,15})", path.stem)
+    return f"+{match.group(1)}" if match else path.stem
+
+
+async def recover_userbot_sessions(db):
+    res = await db.execute(select(UserbotSession))
+    sessions = list(res.scalars().all())
+    changed = False
+
+    for sess in sessions:
+        if sess.is_active or sess.id in failed_session_ids:
+            continue
+        if find_session_file(sess.session_name, sess.phone):
+            logger.warning("Reactivating userbot session %s because a session file is available.", sess.session_name)
+            sess.is_active = True
+            changed = True
+
+    if not sessions:
+        files = session_files()
+        if files:
+            selected = files[0]
+            session_name = selected.stem
+            phone = infer_phone_from_session_file(selected)
+            logger.warning("Registering uploaded userbot session %s for phone %s.", selected.name, phone)
+            db.add(UserbotSession(phone=phone, session_name=session_name, is_active=True))
+            changed = True
+
+    if changed:
+        await db.commit()
+
+
 async def notify_admin(message: str):
     if bot and settings.admin_user_id:
         try:
@@ -48,6 +161,7 @@ async def notify_admin(message: str):
 
 async def handle_session_death(session_id: int, session_name: str, phone: str, error_msg: str):
     logger.error(f"Session '{session_name}' ({phone}) has died: {error_msg}")
+    failed_session_ids.add(session_id)
     async with async_session() as db:
         await deactivate_userbot_session(db, session_name)
     
@@ -176,13 +290,7 @@ async def setup_client_handlers(client: TelegramClient, session_id: int):
             logger.error(f"Error in process_new_message: {str(e)}")
 
 async def run_client(session_id: int, phone: str, session_name: str, api_id: int, api_hash: str):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    if os.path.exists("/app/data"):
-        sessions_dir = "/app/data/sessions"
-    else:
-        sessions_dir = os.path.join(base_dir, "sessions")
-    os.makedirs(sessions_dir, exist_ok=True)
-    session_path = os.path.join(sessions_dir, session_name)
+    session_path = resolve_session_base(session_name, phone)
     
     logger.info(f"Starting Telethon client for {session_name} at {session_path}...")
     client = TelegramClient(session_path, api_id, api_hash)
@@ -210,6 +318,7 @@ async def run_client(session_id: int, phone: str, session_name: str, api_id: int
             await handle_session_death(session_id, session_name, phone, str(e))
     finally:
         logger.info(f"Disconnecting client for {session_name}...")
+        clients.pop(session_id, None)
         try:
             await client.disconnect()
         except Exception:
@@ -401,6 +510,8 @@ async def start_parser():
         while True:
             try:
                 async with async_session() as db:
+                    await recover_userbot_sessions(db)
+
                     # 1. Update monitored channels mappings from DB
                     stmt_chan = select(Channel).where(Channel.userbot_session_id.isnot(None))
                     res_chan = await db.execute(stmt_chan)

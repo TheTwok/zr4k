@@ -38,8 +38,15 @@ The same process runs:
 - `TELEGRAM_API_HASH`
 - `ADMIN_USER_ID`
 - at least one digest provider key: `GROQ_API_KEY`, `MISTRAL_API_KEY`, or `GEMINI_API_KEY`
+- optional `USERBOT_PHONE`, used by the local userbot login helper and session recovery
 
 No `APP_URL`, public HTTPS certificate, frontend build, or Telegram Mini App configuration is required.
+
+## Persistent files on Bothost
+
+The bot stores runtime data in `/app/data`.
+
+If Bothost renames uploaded files, the app now searches `/app/data` for the best SQLite database file and searches both `/app/data` and `/app/data/sessions` for the matching Telethon `.session` file. If a session was marked inactive after a bad upload path, the parser reactivates it when a valid session file is available.
 
 ## Local checks
 

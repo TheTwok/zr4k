@@ -16,10 +16,10 @@ ICONS = {
     "delete": "6039522349517115015",
     "back": "6039539366177541657",
     "cancel": "6030757850274336631",
-    "disable": "6039522349517115015",
+    "disable": "6030757850274336631",
     "pay": "6028338546736107668",
     "promo": "5773677501825945508",
-    "schedule": "6039569594157371705",
+    "schedule": "5904258298764334001",
     "generate": "5774022692642492953",
     "settings": "5904258298764334001",
     "stats": "5877485980901971030",
@@ -53,7 +53,7 @@ def keyboard(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
 
 def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
-        [button("Личный кабинет", "m:overview", style="primary", icon="cabinet")],
+        [button("Личный кабинет", "m:overview", style="success", icon="cabinet")],
         [button("Источники", "m:sources", style="primary", icon="sources"), button("Фильтры", "m:filters", style="primary", icon="filters")],
         [button("Дайджест", "m:digest", style="primary", icon="digest"), button("Помощь", "m:help", style="primary", icon="help")],
     ]
@@ -93,6 +93,22 @@ def digest_menu(is_pro: bool) -> InlineKeyboardMarkup:
     if is_pro:
         rows.insert(0, [button("Сгенерировать сейчас", "dig:g", style="success", icon="generate")])
     return keyboard(rows)
+
+
+def digest_sources_menu(sources: list) -> InlineKeyboardMarkup:
+    rows = [[button(f"@{source.username}", f"dig:source:{source.id}", style="primary", icon="sources")] for source in sources]
+    rows.append([button("В главное меню", "m:main", icon="back")])
+    return keyboard(rows)
+
+
+def digest_source_actions(channel_id: int) -> InlineKeyboardMarkup:
+    return keyboard(
+        [
+            [button("Сгенерировать сейчас", f"dig:g:{channel_id}", style="success", icon="generate")],
+            [button("Расписание", f"sch:c:{channel_id}", style="primary", icon="schedule")],
+            [button("К источникам", "m:digest", icon="back")],
+        ]
+    )
 
 
 def digest_locked_menu() -> InlineKeyboardMarkup:

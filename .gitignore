@@ -42,3 +42,4 @@ backend/app/tasks.py
 .DS_Store
 *.log
 .tmp_emoji_session/
+.tmp_session_check/

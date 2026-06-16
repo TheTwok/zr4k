@@ -35,7 +35,9 @@ async def main():
         print("❌ Error: Please specify valid TELEGRAM_API_ID and TELEGRAM_API_HASH in your backend/.env file.")
         return
         
-    phone = input("Enter userbot phone number (e.g. +79001234567): ").strip()
+    default_phone = settings.userbot_phone
+    prompt = f"Enter userbot phone number [{default_phone}]: " if default_phone else "Enter userbot phone number (e.g. +79001234567): "
+    phone = input(prompt).strip() or default_phone
     if not phone:
         print("❌ Error: Phone number is required.")
         return

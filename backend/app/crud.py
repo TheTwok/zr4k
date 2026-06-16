@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, delete
+from sqlalchemy import func, delete, update
 from backend.app.models import User, Channel, UserChannel, Keyword, CaughtMessage, Promocode, Activation, UserbotSession
 
 async def get_user(db: AsyncSession, user_id: int) -> User | None:
@@ -278,4 +278,5 @@ async def deactivate_userbot_session(db: AsyncSession, session_name: str):
     session = res.scalar_one_or_none()
     if session:
         session.is_active = False
+        await db.execute(update(Channel).where(Channel.userbot_session_id == session.id).values(userbot_session_id=None))
         await db.commit()
