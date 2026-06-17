@@ -2,16 +2,16 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 ICONS = {
-    "overview": "5879770735999717115",
-    "cabinet": "5879770735999717115",
-    "sources": "6039451237743595514",
-    "source_item": "6039565797406282001",
-    "filters": "6039779802741739617",
-    "digest": "5931621672846103580",
+    "overview": "6032693626394382504",
+    "cabinet": "6032693626394382504",
+    "sources": "5890883384057533697",
+    "source_item": "5890883384057533697",
+    "filters": "6034969813032374911",
+    "digest": "5956148757899776734",
     "pro": "6028338546736107668",
-    "crown": "6028338546736107668",
+    "crown": "5850655360963556988",
     "help": "6028435952299413210",
-    "admin": "6030537007350944596",
+    "admin": "5850655360963556988",
     "add": "6032924188828767321",
     "add_source": "6028171274939797252",
     "list": "6034969813032374911",
@@ -22,7 +22,7 @@ ICONS = {
     "pay": "6028338546736107668",
     "promo": "5773677501825945508",
     "schedule": "5778605968208170641",
-    "generate": "5931621672846103580",
+    "generate": "5956148757899776734",
     "settings": "6039779802741739617",
     "stats": "5877485980901971030",
     "users": "5879770735999717115",
@@ -57,7 +57,7 @@ def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [button("Личный кабинет", "m:overview", style="success", icon="cabinet")],
         [button("Источники", "m:sources", style="primary", icon="sources"), button("Фильтры", "m:filters", style="primary", icon="filters")],
-        [button("Дайджест", "m:digest", style="primary", icon="digest"), button("FAQ", "m:help", style="primary", icon="help")],
+        [button("AI Дайджест", "m:digest", style="primary", icon="digest"), button("FAQ", "m:help", style="primary", icon="help")],
     ]
     if is_admin:
         rows.append([button("Админ", "m:admin", style="primary", icon="admin")])
@@ -126,8 +126,8 @@ def digest_locked_menu() -> InlineKeyboardMarkup:
 def schedule_menu() -> InlineKeyboardMarkup:
     return keyboard(
         [
-            [button("Настроить ежедневный дайджест", "dig:sched", style="primary", icon="schedule")],
-            [button("В раздел Дайджест", "m:digest", icon="digest")],
+            [button("Настроить ежедневный AI Дайджест", "dig:sched", style="primary", icon="schedule")],
+            [button("В раздел AI Дайджест", "m:digest", icon="digest")],
         ]
     )
 
@@ -135,9 +135,8 @@ def schedule_menu() -> InlineKeyboardMarkup:
 def period_menu() -> InlineKeyboardMarkup:
     return keyboard(
         [
-        [button("1 час", "dig:p:1", style="primary"), button("12 часов", "dig:p:12", style="primary")],
-        [button("24 часа", "dig:p:24", style="primary"), button("48 часов", "dig:p:48", style="primary")],
-        [button("7 дней", "dig:p:168", style="primary")],
+        [button("1 час", "dig:p:1", style="primary"), button("3 часа", "dig:p:3", style="primary")],
+        [button("6 часов", "dig:p:6", style="primary"), button("12 часов", "dig:p:12", style="primary")],
         [button("Назад", "m:digest", icon="back")],
         ]
     )

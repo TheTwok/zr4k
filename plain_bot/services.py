@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.types import User as TelegramUser
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 
 from backend.app import crud
 from backend.app.config import settings
@@ -70,14 +70,14 @@ TEXT_DEFAULTS = {
         "1. Добавьте публичный канал в разделе Источники.\n"
         "2. Добавьте фильтры для выбранного канала.\n"
         "3. Совпадения будут приходить сообщениями от бота и сохраняться в этом чате.\n"
-        "4. В разделе Дайджест можно выбрать источник и составить AI-сводку или настроить ежедневную отправку.\n\n"
+        "4. В разделе AI Дайджест можно выбрать источник и составить AI-сводку или настроить ежедневную отправку.\n\n"
         "<b>Режимы фильтров</b>\n"
         "Смысловой: ищет сообщения по теме и близкому смыслу, даже если точной фразы нет в тексте.\n"
         "Точный: ищет указанное слово или фразу без смысловых расширений.\n"
         "Исключение: отсекает сообщения, где найдено указанное слово или фраза."
     ),
     "digest": (
-        "<b>Дайджест</b>\n"
+        "<b>AI Дайджест</b>\n"
         "Выберите источник, затем укажите, когда хотите получать дайджест, или составьте его вручную."
     ),
 }
@@ -85,7 +85,7 @@ TEXT_DEFAULTS = {
 TEXT_TITLES = {
     "main": "Основное приветствие",
     "faq": "FAQ",
-    "digest": "Дайджест",
+    "digest": "AI Дайджест",
 }
 
 
@@ -414,18 +414,18 @@ async def delete_keyword(user_id: int, keyword_id: int) -> bool:
 async def generate_digest(user_id: int, period_hours: int, channel_ids: list[int] | None = None) -> str:
     selected_ids = [int(item) for item in (channel_ids or [])]
     if selected_ids and len(set(selected_ids)) > DIGEST_MAX_SOURCES:
-        raise ValueError("Выбрано слишком много источников для одного дайджеста.")
+        raise ValueError("Выбрано слишком много источников для одного AI Дайджеста.")
 
     async with async_session() as db:
         user = await crud.get_user(db, user_id)
         if not user or not user.is_pro:
-            raise ValueError("Дайджест доступен только на PRO.")
+            raise ValueError("AI Дайджест доступен только на PRO.")
         now = datetime.utcnow()
         if user.last_digest_at and not is_admin(user):
             wait_time = user.last_digest_at + timedelta(hours=4) - now
             if wait_time > timedelta(0):
                 minutes_left = max(1, int(wait_time.total_seconds() / 60))
-                raise ValueError(f"Следующий ручной дайджест будет доступен через {minutes_left} мин.")
+                raise ValueError(f"Следующий ручной AI Дайджест будет доступен через {minutes_left} мин.")
 
         stmt = (
             select(Channel)
@@ -551,7 +551,7 @@ async def scheduled_digest_tick(bot: Bot) -> None:
                     await session.commit()
                     await bot.send_message(
                         user.telegram_id,
-                        f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_text}",
+                        f"<b>Ежедневный AI Дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_text}",
                     )
                     continue
                 messages_texts = prepare_digest_messages(
@@ -565,7 +565,7 @@ async def scheduled_digest_tick(bot: Bot) -> None:
                     await session.commit()
                     await bot.send_message(
                         user.telegram_id,
-                        f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_text}",
+                        f"<b>Ежедневный AI Дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_text}",
                     )
                     continue
                 digest_text = clip_digest(await generate_summary(messages_texts, db=session))
@@ -575,7 +575,7 @@ async def scheduled_digest_tick(bot: Bot) -> None:
                 await session.commit()
             await bot.send_message(
                 user.telegram_id,
-                f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_to_html(digest_text)}",
+                f"<b>Ежедневный AI Дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_to_html(digest_text)}",
             )
         except Exception:
             continue
@@ -606,6 +606,25 @@ async def admin_stats() -> dict:
         now = datetime.utcnow()
         pro_filter = or_(User.is_admin == True, User.pro_expires_at > now)
         free_filter = and_(User.is_admin == False, or_(User.pro_expires_at.is_(None), User.pro_expires_at <= now))
+        provider_rows = await db.execute(
+            select(
+                AIUsageStat.provider,
+                func.count(AIUsageStat.id),
+                func.sum(case((AIUsageStat.is_success == True, 1), else_=0)),
+                func.sum(case((AIUsageStat.is_success == False, 1), else_=0)),
+                func.sum(AIUsageStat.total_tokens),
+            )
+            .group_by(AIUsageStat.provider)
+        )
+        ai_providers = {
+            provider: {
+                "calls": calls or 0,
+                "success": success or 0,
+                "failed": failed or 0,
+                "tokens": tokens or 0,
+            }
+            for provider, calls, success, failed, tokens in provider_rows.all()
+        }
         return {
             "users": await db.scalar(select(func.count(User.telegram_id))) or 0,
             "pro": await db.scalar(select(func.count(User.telegram_id)).where(pro_filter)) or 0,
@@ -615,6 +634,7 @@ async def admin_stats() -> dict:
             "messages": await db.scalar(select(func.count(CaughtMessage.id))) or 0,
             "income": await db.scalar(select(func.sum(User.stars_income))) or 0,
             "ai_calls": await db.scalar(select(func.count(AIUsageStat.id))) or 0,
+            "ai_providers": ai_providers,
         }
 
 

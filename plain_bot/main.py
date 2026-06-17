@@ -332,9 +332,17 @@ async def show_channel_filters(callback: CallbackQuery, user_id: int, channel_id
     if not keywords:
         lines.append("Фильтров пока нет.")
     else:
-        for idx, item in enumerate(keywords, start=1):
-            mode = services.MODE_LABELS.get(item.mode, item.mode)
-            lines.append(f"{idx}. {escape(item.keyword)} — {escape(mode)}")
+        grouped = {"semantic": [], "exact": [], "exclude": []}
+        for item in keywords:
+            mode = "exact" if item.mode in {"exact", "exact_phrase", "exact_word"} else item.mode
+            grouped.setdefault(mode, []).append(item)
+
+        for mode in ("semantic", "exact", "exclude"):
+            items = grouped.get(mode) or []
+            if not items:
+                continue
+            lines.extend(["", f"<b>{escape(services.MODE_LABELS.get(mode, mode))}</b>"])
+            lines.extend(f"{idx}. {escape(item.keyword)}" for idx, item in enumerate(items, start=1))
     rows = [
         [kb.button("Добавить фильтр", f"kw:add:{channel_id}", style="success", icon="add")],
         [kb.button("Удалить фильтр", f"kw:del:{channel_id}", style="danger", icon="delete")],
@@ -485,7 +493,7 @@ async def menu_digest(callback: CallbackQuery, state: FSMContext) -> None:
     if not user.is_pro:
         await safe_edit(
             callback,
-            "<b>Дайджест</b>\n"
+            "<b>AI Дайджест</b>\n"
             "AI-дайджест доступен на PRO.\n\n"
             "Он собирает сообщения за выбранный период и присылает итоговую сводку прямо в чат.",
             kb.digest_locked_menu(),
@@ -496,8 +504,8 @@ async def menu_digest(callback: CallbackQuery, state: FSMContext) -> None:
     if not sources:
         await safe_edit(
             callback,
-            "<b>Дайджест</b>\n"
-            "Сначала добавьте источник, чтобы генерировать или настроить ежедневный дайджест.",
+            "<b>AI Дайджест</b>\n"
+            "Сначала добавьте источник, чтобы генерировать или настроить ежедневный AI Дайджест.",
             kb.back_main(),
         )
         await callback.answer()
@@ -518,12 +526,12 @@ async def digest_source(callback: CallbackQuery) -> None:
     channel_id = int(callback.data.split(":")[2])
     source = next((item for item in await services.list_sources(user.telegram_id) if item.id == channel_id), None)
     if not source:
-        await safe_edit(callback, "<b>Дайджест</b>\nИсточник не найден.", kb.back_main())
+        await safe_edit(callback, "<b>AI Дайджест</b>\nИсточник не найден.", kb.back_main())
         await callback.answer()
         return
     await safe_edit(
         callback,
-        f"<b>Дайджест: @{escape(source.username)}</b>\n"
+        f"<b>AI Дайджест: @{escape(source.username)}</b>\n"
         f"Расписание: {escape(schedule_label(source.digest_schedule_time, source.digest_schedule_days))}.",
         kb.digest_source_actions(channel_id),
     )
@@ -537,16 +545,16 @@ async def digest_generate_start(callback: CallbackQuery, state: FSMContext) -> N
     if not user:
         return
     if not user.is_pro:
-        await safe_edit(callback, "<b>Дайджест</b>\nДля генерации нужна подписка PRO.", kb.digest_locked_menu())
+        await safe_edit(callback, "<b>AI Дайджест</b>\nДля генерации нужна подписка PRO.", kb.digest_locked_menu())
         await callback.answer()
         return
     parts = callback.data.split(":")
     if len(parts) < 3:
-        await safe_edit(callback, "<b>Дайджест</b>\nВыберите источник.", kb.digest_sources_menu(await services.list_sources(user.telegram_id)))
+        await safe_edit(callback, "<b>AI Дайджест</b>\nВыберите источник.", kb.digest_sources_menu(await services.list_sources(user.telegram_id)))
         await callback.answer()
         return
     await state.update_data(digest_channel_id=int(parts[2]))
-    await safe_edit(callback, "<b>Период дайджеста</b>\nВыберите интервал.", kb.period_menu())
+    await safe_edit(callback, "<b>Период AI Дайджеста</b>\nВыберите интервал.", kb.period_menu())
     await callback.answer()
 
 
@@ -559,20 +567,20 @@ async def digest_generate_period(callback: CallbackQuery, state: FSMContext) -> 
     data = await state.get_data()
     channel_id = int(data.get("digest_channel_id") or 0)
     if not channel_id:
-        await safe_edit(callback, "<b>Дайджест</b>\nСначала выберите источник.", kb.digest_sources_menu(await services.list_sources(user.telegram_id)))
+        await safe_edit(callback, "<b>AI Дайджест</b>\nСначала выберите источник.", kb.digest_sources_menu(await services.list_sources(user.telegram_id)))
         await callback.answer()
         return
     await state.clear()
-    await safe_edit(callback, "Готовлю дайджест. Это может занять до минуты.", None)
+    await safe_edit(callback, "Готовлю AI Дайджест. Это может занять до минуты.", None)
     await callback.answer()
     try:
         text = await services.generate_digest(user.telegram_id, hours, [channel_id])
         await callback.message.answer(
-            f"<b>Дайджест за {hours} ч.</b>\n\n{services.digest_to_html(text)}",
+            f"<b>AI Дайджест за {hours} ч.</b>\n\n{services.digest_to_html(text)}",
         )
-        await safe_edit(callback, "Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_source_actions(channel_id))
+        await safe_edit(callback, "AI Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_source_actions(channel_id))
     except Exception as exc:
-        await safe_edit(callback, f"Не удалось создать дайджест: {escape(services.error_text(exc))}", kb.digest_source_actions(channel_id))
+        await safe_edit(callback, f"Не удалось создать AI Дайджест: {escape(services.error_text(exc))}", kb.digest_source_actions(channel_id))
 
 
 @router.callback_query(F.data.startswith("dig:src:"))
@@ -587,7 +595,7 @@ async def digest_toggle_source(callback: CallbackQuery, state: FSMContext) -> No
     if channel_id in selected:
         selected.remove(channel_id)
     elif len(selected) >= services.DIGEST_MAX_SOURCES:
-        await callback.answer("Выбрано слишком много источников для одного дайджеста.", show_alert=True)
+        await callback.answer("Выбрано слишком много источников для одного AI Дайджеста.", show_alert=True)
         return
     else:
         selected.add(channel_id)
@@ -595,7 +603,7 @@ async def digest_toggle_source(callback: CallbackQuery, state: FSMContext) -> No
     sources = await services.list_digest_sources(user.telegram_id)
     await safe_edit(
         callback,
-        f"<b>Источники дайджеста</b>\n"
+        f"<b>Источники AI Дайджеста</b>\n"
         f"Период: {hours} ч.\n"
         f"Выбрано источников: {len(selected)}.",
         kb.digest_source_menu(sources, selected, bool(selected)),
@@ -615,16 +623,16 @@ async def digest_generate_finish(callback: CallbackQuery, state: FSMContext) -> 
         await callback.answer("Выберите хотя бы один источник.", show_alert=True)
         return
     await state.clear()
-    await safe_edit(callback, "Готовлю дайджест. Это может занять до минуты.", None)
+    await safe_edit(callback, "Готовлю AI Дайджест. Это может занять до минуты.", None)
     await callback.answer()
     try:
         text = await services.generate_digest(user.telegram_id, hours, channel_ids)
         await callback.message.answer(
-            f"<b>Дайджест за {hours} ч.</b>\n\n{services.digest_to_html(text)}",
+            f"<b>AI Дайджест за {hours} ч.</b>\n\n{services.digest_to_html(text)}",
         )
-        await safe_edit(callback, "Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_menu(True))
+        await safe_edit(callback, "AI Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_menu(True))
     except Exception as exc:
-        await safe_edit(callback, f"Не удалось создать дайджест: {escape(services.error_text(exc))}", kb.digest_menu(user.is_pro))
+        await safe_edit(callback, f"Не удалось создать AI Дайджест: {escape(services.error_text(exc))}", kb.digest_menu(user.is_pro))
 
 
 @router.callback_query(F.data == "dig:sched")
@@ -634,12 +642,12 @@ async def schedule_sources(callback: CallbackQuery, state: FSMContext) -> None:
     if not user:
         return
     if not user.is_pro:
-        await safe_edit(callback, "<b>Ежедневный дайджест</b>\nРасписание доступно на PRO.", kb.digest_locked_menu())
+        await safe_edit(callback, "<b>Ежедневный AI Дайджест</b>\nРасписание доступно на PRO.", kb.digest_locked_menu())
         await callback.answer()
         return
     sources = await services.list_sources(user.telegram_id)
     if not sources:
-        await safe_edit(callback, "<b>Ежедневный дайджест</b>\nСначала добавьте источник.", kb.schedule_menu())
+        await safe_edit(callback, "<b>Ежедневный AI Дайджест</b>\nСначала добавьте источник.", kb.schedule_menu())
         await callback.answer()
         return
     configured = [
@@ -649,11 +657,11 @@ async def schedule_sources(callback: CallbackQuery, state: FSMContext) -> None:
     ]
     lines = [
         "<b>Расписание</b>",
-        "Выберите источник, затем укажите время, когда хотите получать ежедневный дайджест.",
+        "Выберите источник, затем укажите время, когда хотите получать ежедневный AI Дайджест.",
         "",
         "<b>Текущие настройки</b>",
     ]
-    lines.extend(configured or ["Пока нет настроенных ежедневных дайджестов."])
+    lines.extend(configured or ["Пока нет настроенных ежедневных AI Дайджестов."])
     rows = [[kb.button(f"@{source.username}", f"sch:c:{source.id}", style="primary", icon="source_item")] for source in sources]
     rows.append([kb.button("Назад", "m:digest", icon="back")])
     await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
@@ -668,7 +676,7 @@ async def schedule_time(callback: CallbackQuery, state: FSMContext) -> None:
     channel_id = int(callback.data.split(":")[2])
     source = next((item for item in await services.list_sources(user.telegram_id) if item.id == channel_id), None)
     if not source:
-        await safe_edit(callback, "<b>Ежедневный дайджест</b>\nИсточник не найден.", kb.schedule_menu())
+        await safe_edit(callback, "<b>Ежедневный AI Дайджест</b>\nИсточник не найден.", kb.schedule_menu())
         await callback.answer()
         return
     await state.set_state(ScheduleStates.waiting_time)
@@ -680,7 +688,7 @@ async def schedule_time(callback: CallbackQuery, state: FSMContext) -> None:
     current = schedule_label(source.digest_schedule_time, source.digest_schedule_days)
     await safe_edit(
         callback,
-        f"<b>Ежедневный дайджест: @{escape(source.username)}</b>\n"
+        f"<b>Ежедневный AI Дайджест: @{escape(source.username)}</b>\n"
         f"Расписание: {escape(current)}.\n\n"
         "Отправьте сообщением время, когда хотите получать ежедневную рассылку.\n\n"
         "Формат: <code>XX:XX</code>\n"
@@ -709,7 +717,7 @@ async def schedule_time_received(message: Message, state: FSMContext) -> None:
         for preset, (label, _) in services.DAY_PRESETS.items()
     ]
     rows.append([kb.button("Назад", f"sch:c:{channel_id}", icon="back")])
-    await message.answer("<b>Ежедневный дайджест</b>\nВыберите дни отправки.", reply_markup=kb.keyboard(rows))
+    await message.answer("<b>Ежедневный AI Дайджест</b>\nВыберите дни отправки.", reply_markup=kb.keyboard(rows))
 
 
 @router.callback_query(F.data.startswith("sch:set:"))
@@ -722,7 +730,7 @@ async def schedule_set(callback: CallbackQuery, state: FSMContext) -> None:
     label, days = services.DAY_PRESETS[preset]
     await services.set_schedule(user.telegram_id, int(channel_id), time_value, days)
     await state.clear()
-    await safe_edit(callback, f"Ежедневный дайджест сохранен: {time_value}, {escape(label)}.", kb.schedule_menu())
+    await safe_edit(callback, f"Ежедневный AI Дайджест сохранен: {time_value}, {escape(label)}.", kb.schedule_menu())
     await callback.answer()
 
 
@@ -734,7 +742,7 @@ async def schedule_off(callback: CallbackQuery, state: FSMContext) -> None:
     channel_id = int(callback.data.split(":")[2])
     await services.set_schedule(user.telegram_id, channel_id, None, None)
     await state.clear()
-    await safe_edit(callback, "Ежедневный дайджест отключен.", kb.schedule_menu())
+    await safe_edit(callback, "Ежедневный AI Дайджест отключен.", kb.schedule_menu())
     await callback.answer()
 
 
@@ -876,7 +884,7 @@ async def admin_stats(callback: CallbackQuery) -> None:
     if not await require_admin(callback):
         return
     stats = await services.admin_stats()
-    text = (
+    lines = [
         "<b>Статистика</b>\n"
         f"Пользователи: {stats['users']}\n"
         f"PRO: {stats['pro']}\n"
@@ -886,8 +894,18 @@ async def admin_stats(callback: CallbackQuery) -> None:
         f"Сообщения: {stats['messages']}\n"
         f"Доход Stars: {stats['income']}\n"
         f"AI-вызовы: {stats['ai_calls']}"
-    )
-    await safe_edit(callback, text, kb.admin_menu())
+    ]
+    providers = stats.get("ai_providers", {})
+    lines.extend(["", "<b>AI-провайдеры</b>"])
+    for key, title in (("gemini", "Gemini"), ("mistral", "Mistral"), ("groq", "Groq")):
+        item = providers.get(key, {})
+        lines.append(
+            f"{title}: {item.get('calls', 0)} выз., "
+            f"успешно {item.get('success', 0)}, "
+            f"ошибок {item.get('failed', 0)}, "
+            f"токены {item.get('tokens', 0)}"
+        )
+    await safe_edit(callback, "\n".join(lines), kb.admin_menu())
     await callback.answer()
 
 
@@ -1020,7 +1038,7 @@ async def admin_cooldown(callback: CallbackQuery) -> None:
     offset = int(parts[4]) if len(parts) > 4 else 0
     await services.admin_reset_cooldown(target_id)
     await callback.answer("Cooldown сброшен.", show_alert=True)
-    await safe_edit(callback, "Cooldown ручного дайджеста сброшен.", kb.keyboard([[kb.button("Назад", f"adm:u:{target_id}:{segment}:{offset}", icon="back")]]))
+    await safe_edit(callback, "Cooldown ручного AI Дайджеста сброшен.", kb.keyboard([[kb.button("Назад", f"adm:u:{target_id}:{segment}:{offset}", icon="back")]]))
 
 
 @router.callback_query(F.data == "adm:promos")
