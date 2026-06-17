@@ -71,7 +71,10 @@ def back_main() -> InlineKeyboardMarkup:
 def cabinet_menu(is_pro: bool, is_owner: bool = False) -> InlineKeyboardMarkup:
     rows = []
     if not is_owner:
-        rows.append([button("Подписка PRO", "m:pro", style="success" if not is_pro else "primary", icon="pro")])
+        if is_pro:
+            rows.append([button("Продлить подписку", "pro:buy", style="success", icon="pay")])
+        else:
+            rows.append([button("Подписка PRO", "m:pro", style="success", icon="pro")])
     rows.append([button("В главное меню", "m:main", icon="back")])
     return keyboard(rows)
 
@@ -118,7 +121,7 @@ def digest_locked_menu() -> InlineKeyboardMarkup:
         [
             [button("Купить PRO", "pro:buy", style="success", icon="pay")],
             [button("Ввести промокод", "pro:promo", style="primary", icon="promo")],
-            [button("В личный кабинет", "m:overview", icon="cabinet")],
+            [button("В главное меню", "m:main", icon="back")],
         ]
     )
 

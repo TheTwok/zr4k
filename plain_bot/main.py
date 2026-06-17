@@ -263,8 +263,7 @@ async def source_add_finish(message: Message, state: FSMContext) -> None:
         channel = await services.add_source(user.telegram_id, message.text or "")
         await state.clear()
         await message.answer(
-            f"Источник @{escape(channel.username)} добавлен.\n"
-            "Если userbot-сессия активна, парсер подключит канал автоматически.",
+            f"Источник @{escape(channel.username)} добавлен.",
             reply_markup=kb.sources_menu(),
         )
     except Exception as exc:
