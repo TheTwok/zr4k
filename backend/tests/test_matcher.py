@@ -29,6 +29,16 @@ def test_exact_word_matching():
     assert evaluate_message("это слова", rules) is False # different ending
     assert evaluate_message("это слову", rules) is False # different ending
 
+def test_exact_unified_matching():
+    word_rules = [{"keyword": "Слово", "mode": "exact"}]
+    phrase_rules = [{"keyword": "важная фраза", "mode": "exact"}]
+
+    assert evaluate_message("это слово", word_rules) is True
+    assert evaluate_message("это словоформа", word_rules) is False
+    assert evaluate_message("здесь важная фраза", phrase_rules) is True
+    assert evaluate_message("здесь важная новая фраза", phrase_rules) is False
+    assert evaluate_message("здесь неважная фраза", phrase_rules) is False
+
 def test_exclude_matching():
     # Positive: ремонт. Exclude: -реклама
     rules = [

@@ -4,13 +4,13 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 ICONS = {
     "overview": "5879770735999717115",
     "cabinet": "5879770735999717115",
-    "sources": "6005909802314633125",
-    "source_item": "5888620056551625531",
+    "sources": "6039451237743595514",
+    "source_item": "6039565797406282001",
     "filters": "6039779802741739617",
-    "digest": "6035162669948867129",
+    "digest": "5931621672846103580",
     "pro": "6028338546736107668",
     "crown": "6028338546736107668",
-    "help": "6030848053177486888",
+    "help": "6028435952299413210",
     "admin": "6030537007350944596",
     "add": "6032924188828767321",
     "add_source": "6028171274939797252",
@@ -22,7 +22,7 @@ ICONS = {
     "pay": "6028338546736107668",
     "promo": "5773677501825945508",
     "schedule": "5778605968208170641",
-    "generate": "6035162669948867129",
+    "generate": "5931621672846103580",
     "settings": "6039779802741739617",
     "stats": "5877485980901971030",
     "users": "5879770735999717115",
@@ -57,7 +57,7 @@ def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [button("Личный кабинет", "m:overview", style="success", icon="cabinet")],
         [button("Источники", "m:sources", style="primary", icon="sources"), button("Фильтры", "m:filters", style="primary", icon="filters")],
-        [button("Дайджест", "m:digest", style="primary", icon="digest"), button("Помощь", "m:help", style="primary", icon="help")],
+        [button("Дайджест", "m:digest", style="primary", icon="digest"), button("FAQ", "m:help", style="primary", icon="help")],
     ]
     if is_admin:
         rows.append([button("Админ", "m:admin", style="primary", icon="admin")])
@@ -93,7 +93,7 @@ def digest_menu(is_pro: bool) -> InlineKeyboardMarkup:
         [button("В главное меню", "m:main", icon="back")],
     ]
     if is_pro:
-        rows.insert(0, [button("Сгенерировать сейчас", "dig:g", style="success", icon="generate")])
+        rows.insert(0, [button("Составить дайджест", "dig:g", style="success", icon="generate")])
     return keyboard(rows)
 
 
@@ -106,7 +106,7 @@ def digest_sources_menu(sources: list) -> InlineKeyboardMarkup:
 def digest_source_actions(channel_id: int) -> InlineKeyboardMarkup:
     return keyboard(
         [
-            [button("Сгенерировать сейчас", f"dig:g:{channel_id}", style="success", icon="generate")],
+            [button("Составить дайджест", f"dig:g:{channel_id}", style="success", icon="generate")],
             [button("Расписание", f"sch:c:{channel_id}", style="primary", icon="schedule")],
             [button("К источникам", "m:digest", icon="back")],
         ]
@@ -158,7 +158,7 @@ def digest_source_menu(sources: list, selected_ids: set[int], can_generate: bool
             ]
         )
     if can_generate:
-        rows.append([button("Сгенерировать дайджест", "dig:run", style="success", icon="generate")])
+        rows.append([button("Составить дайджест", "dig:run", style="success", icon="generate")])
     rows.append([button("Назад", "dig:g", icon="back")])
     return keyboard(rows)
 
@@ -179,6 +179,7 @@ def admin_menu() -> InlineKeyboardMarkup:
             [button("Статистика", "adm:stats", style="primary", icon="stats")],
             [button("PRO", "adm:users:pro:0", style="success", icon="crown"), button("FREE", "adm:users:free:0", style="primary", icon="users")],
             [button("Промокоды", "adm:promos", style="primary", icon="promo")],
+            [button("Тексты меню", "adm:texts", style="primary", icon="settings")],
             [button("Сессии парсера", "adm:sessions", style="primary", icon="sessions")],
             [button("В главное меню", "m:main", icon="back")],
         ]
@@ -192,7 +193,7 @@ def cancel_menu() -> InlineKeyboardMarkup:
 def keyword_continue_menu(channel_id: int) -> InlineKeyboardMarkup:
     return keyboard(
         [
-            [button("Готово", f"kw:done:{channel_id}", style="success", icon="done")],
-            [button("Сменить тип фильтра", f"kw:add:{channel_id}", style="primary", icon="filters")],
+            [button("Сменить режим", f"kw:add:{channel_id}", style="primary", icon="filters")],
+            [button("Назад к фильтрам", f"kw:done:{channel_id}", icon="back")],
         ]
     )

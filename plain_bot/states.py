@@ -21,3 +21,7 @@ class AdminPromoStates(StatesGroup):
     waiting_code = State()
     waiting_days = State()
     waiting_uses = State()
+
+
+class AdminTextStates(StatesGroup):
+    waiting_text = State()

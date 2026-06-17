@@ -67,7 +67,7 @@ class Keyword(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), index=True)
     channel_id: Mapped[int] = mapped_column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), index=True)
     keyword: Mapped[str] = mapped_column(String(255), index=True)
-    mode: Mapped[str] = mapped_column(String(20), default="semantic") # semantic, exact_phrase, exact_word, exclude
+    mode: Mapped[str] = mapped_column(String(20), default="semantic")
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="keywords")
@@ -163,3 +163,10 @@ class AIUsageStat(Base):
     is_success: Mapped[bool] = mapped_column(Boolean, default=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+class BotText(Base):
+    __tablename__ = "bot_texts"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())

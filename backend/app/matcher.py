@@ -39,6 +39,12 @@ def tokenize_raw_case(text: str) -> list[str]:
     text_clean = punctuation_regex.sub(" ", text)
     return text_clean.split()
 
+def contains_token_sequence(tokens: list[str], sequence: list[str]) -> bool:
+    if not sequence or len(sequence) > len(tokens):
+        return False
+    size = len(sequence)
+    return any(tokens[index:index + size] == sequence for index in range(len(tokens) - size + 1))
+
 class KeywordMatcher:
     def __init__(self, message_text: str):
         self.raw_text = message_text
@@ -73,17 +79,17 @@ class KeywordMatcher:
             return False
 
         elif mode == "exact_phrase":
-            # Exact Phrase
-            # Remove surrounding quotes if present
             clean_kw = keyword.strip('"').strip("'")
-            kw_phrase = clean_text_for_phrase_matching(clean_kw)
-            return kw_phrase in self.normalized_text
+            return contains_token_sequence(self.words_lower, tokenize_and_clean(clean_kw))
 
         elif mode == "exact_word":
-            # Exact Word (case-insensitive, exact ending)
-            # Remove leading '+' if present
             clean_kw = keyword.lstrip("+").strip().lower()
             return clean_kw in self.words_lower
+
+        elif mode == "exact":
+            clean_kw = keyword.strip('"').strip("'").lstrip("+").strip()
+            kw_terms = tokenize_and_clean(clean_kw)
+            return contains_token_sequence(self.words_lower, kw_terms)
 
         else:
             # Semantic (default)

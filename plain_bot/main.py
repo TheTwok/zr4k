@@ -29,7 +29,7 @@ from backend.app.config import settings
 from backend.parser import start_parser
 from plain_bot import keyboards as kb
 from plain_bot import services
-from plain_bot.states import AdminPromoStates, KeywordStates, PromoStates, ScheduleStates, SourceStates
+from plain_bot.states import AdminPromoStates, AdminTextStates, KeywordStates, PromoStates, ScheduleStates, SourceStates
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -90,16 +90,7 @@ async def require_user_from_callback(callback: CallbackQuery) -> services.User |
 
 
 async def show_main(target: Message | CallbackQuery, user: services.User) -> None:
-    text = (
-        "<b>ZR4K</b>\n"
-        "Бот для мониторинга Telegram-каналов в реальном времени и умной ИИ-аналитики.\n\n"
-        "<b>Что вы можете делать:</b>\n"
-        "• Подключать Telegram-каналы как источники.\n"
-        "• Настраивать точные, смысловые и исключающие фильтры.\n"
-        "• Получать найденные совпадения прямо в чат.\n"
-        "• Создавать ручные и автоматические AI-дайджесты.\n\n"
-        "Выберите раздел ниже."
-    )
+    text = await services.get_bot_text("main")
     markup = kb.main_menu(services.is_admin(user))
     if isinstance(target, CallbackQuery):
         await safe_edit(target, text, markup)
@@ -111,17 +102,26 @@ async def show_main(target: Message | CallbackQuery, user: services.User) -> Non
 async def show_cabinet(target: Message | CallbackQuery, user: services.User) -> None:
     data = await services.overview(user.telegram_id)
     profile = data["user"]
-    text = (
-        "<b>Личный кабинет</b>\n"
-        f"Тариф: {services.plan_label(profile)}\n"
-        f"PRO: {services.pro_until_text(profile)}\n\n"
-        f"Источники: {data['sources']} / {data['source_limit']}\n"
-        f"Ключевые слова: {data['keywords']} (до {data['keyword_limit']} на источник)\n"
-        f"Найдено сообщений: {data['messages']}\n\n"
-        "<b>Лимиты</b>\n"
-        "Free: 1 источник и 5 ключевых слов.\n"
-        "PRO: 20 источников и до 20 ключевых слов для каждого источника."
-    )
+    lines = ["<b>Личный кабинет</b>", f"Тариф: {services.plan_label(profile)}"]
+    if profile and profile.is_pro:
+        until = services.pro_until_text(profile)
+        lines.append(until if services.is_owner(profile) else f"до {until}")
+
+    lines.extend(["", "<b>Источники</b>"])
+    if data["source_details"]:
+        for index, item in enumerate(data["source_details"]):
+            if index:
+                lines.append("")
+            username = str(item["username"])
+            title = str(item["title"] or "").strip()
+            if title and title != f"@{username}":
+                lines.append(f"{escape(title)} (@{escape(username)})")
+            else:
+                lines.append(f"@{escape(username)}")
+            lines.append(f"Ключевых слов: {item['keywords']}")
+    else:
+        lines.append("Источники пока не добавлены.")
+    text = "\n".join(lines)
     markup = kb.cabinet_menu(profile.is_pro if profile else False, services.is_owner(profile))
     if isinstance(target, CallbackQuery):
         await safe_edit(target, text, markup)
@@ -131,15 +131,17 @@ async def show_cabinet(target: Message | CallbackQuery, user: services.User) -> 
 
 
 async def show_pro(target: Message | CallbackQuery, user: services.User) -> None:
-    text = (
-        "<b>Подписка PRO</b>\n"
-        f"Статус: {services.plan_label(user)}\n"
-        f"Действует до: {services.pro_until_text(user)}\n\n"
-        "<b>Лимиты</b>\n"
-        "Free: 1 источник и 5 ключевых слов.\n"
-        "PRO: 20 источников и до 20 ключевых слов для каждого источника.\n\n"
-        "PRO также открывает ручные и автоматические AI-дайджесты."
+    lines = ["<b>Подписка PRO</b>", f"Статус: {services.plan_label(user)}"]
+    if user.is_pro:
+        until = services.pro_until_text(user)
+        lines.append(until if services.is_owner(user) else f"до {until}")
+    lines.extend(
+        [
+            "",
+            "PRO открывает дополнительные источники, больше фильтров и AI-дайджесты.",
+        ]
     )
+    text = "\n".join(lines)
     markup = kb.pro_menu(user.is_pro)
     if isinstance(target, CallbackQuery):
         await safe_edit(target, text, markup)
@@ -185,15 +187,7 @@ async def cmd_help(message: Message) -> None:
     user = await require_user_from_message(message)
     if not user:
         return
-    await message.answer(
-        "<b>Помощь</b>\n"
-        "Источники: добавляйте публичные каналы по @username или t.me/username.\n"
-        "Фильтры: задавайте слова, фразы, смысловой поиск или исключения.\n"
-        "Совпадения приходят сообщениями и остаются в этом чате.\n"
-        "Дайджест: ручная и расписанная AI-сводка для PRO.\n"
-        "PRO: оплата Stars или промокод.",
-        reply_markup=kb.back_main(),
-    )
+    await message.answer(await services.get_bot_text("faq"), reply_markup=kb.back_main())
 
 
 @router.callback_query(F.data == "act:cancel")
@@ -225,21 +219,7 @@ async def menu_help(callback: CallbackQuery) -> None:
     user = await require_user_from_callback(callback)
     if not user:
         return
-    await safe_edit(
-        callback,
-        "<b>Помощь</b>\n"
-        "Работа строится от источника к фильтрам.\n\n"
-        "1. Добавьте канал в разделе Источники.\n"
-        "2. Добавьте фильтры для выбранного канала.\n"
-        "3. Совпадения будут приходить сообщениями от бота и сохраняться в чате.\n"
-        "4. В разделе Дайджест можно выбрать период, источники и собрать AI-сводку.\n\n"
-        "<b>Типы фильтров</b>\n"
-        "Смысловой: ищет сообщения по смыслу, даже если точной фразы нет в тексте.\n"
-        "Точная фраза: ищет фразу целиком в указанном порядке слов.\n"
-        "Точное слово: ищет отдельное слово без совпадений внутри других слов.\n"
-        "Исключение: отсекает сообщения, где найдено указанное слово или фраза.",
-        kb.back_main(),
-    )
+    await safe_edit(callback, await services.get_bot_text("faq"), kb.back_main())
     await callback.answer()
 
 
@@ -288,7 +268,12 @@ async def source_add_finish(message: Message, state: FSMContext) -> None:
             reply_markup=kb.sources_menu(),
         )
     except Exception as exc:
-        await message.answer(f"Не удалось добавить источник: {escape(services.error_text(exc))}", reply_markup=kb.cancel_menu())
+        text = services.error_text(exc)
+        if not user.is_pro and "PRO" in text:
+            await state.clear()
+            await message.answer(escape(text), reply_markup=kb.pro_menu(False))
+        else:
+            await message.answer(f"Не удалось добавить источник: {escape(text)}", reply_markup=kb.cancel_menu())
 
 
 @router.callback_query(F.data == "src:del")
@@ -379,8 +364,7 @@ async def keyword_add_mode(callback: CallbackQuery) -> None:
     channel_id = int(callback.data.split(":")[2])
     rows = [
         [kb.button("Смысловой", f"kw:m:{channel_id}:semantic", style="primary", icon="filters")],
-        [kb.button("Точная фраза", f"kw:m:{channel_id}:exact_phrase", style="primary", icon="filters")],
-        [kb.button("Точное слово", f"kw:m:{channel_id}:exact_word", style="primary", icon="filters")],
+        [kb.button("Точный", f"kw:m:{channel_id}:exact", style="primary", icon="filters")],
         [kb.button("Исключение", f"kw:m:{channel_id}:exclude", style="primary", icon="filters")],
         [kb.button("Назад", f"flt:c:{channel_id}", icon="back")],
     ]
@@ -389,8 +373,7 @@ async def keyword_add_mode(callback: CallbackQuery) -> None:
         "<b>Тип фильтра</b>\n"
         "Выберите режим поиска.\n\n"
         "Смысловой ищет совпадения по теме и смыслу.\n"
-        "Точная фраза ищет фразу целиком.\n"
-        "Точное слово ищет отдельное слово.\n"
+        "Точный ищет указанное слово или фразу без смысловых расширений.\n"
         "Исключение отсекает сообщения с этим словом или фразой.",
         kb.keyboard(rows),
     )
@@ -407,8 +390,7 @@ async def keyword_add_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(channel_id=int(channel_id), mode=mode)
     hints = {
         "semantic": "Смысловой фильтр ищет сообщения по теме и близкому значению. Например: «аренда жилья», «налоги бизнеса», «утечки данных».",
-        "exact_phrase": "Точная фраза сработает только если слова идут рядом и в том же порядке. Например: «ставка ЦБ».",
-        "exact_word": "Точное слово сработает по отдельному слову, без совпадений внутри других слов. Например: «тендер».",
+        "exact": "Точный фильтр ищет указанное слово или фразу без смысловых расширений. Одно слово ищется как отдельное слово, фраза — целиком в указанном порядке.",
         "exclude": "Исключение отсекает сообщения, где есть указанное слово или фраза. Например: «реклама».",
     }
     await safe_edit(
@@ -416,7 +398,7 @@ async def keyword_add_start(callback: CallbackQuery, state: FSMContext) -> None:
         f"<b>Новый фильтр</b>\n"
         f"Режим: {escape(services.MODE_LABELS.get(mode, mode))}\n\n"
         f"{hints.get(mode, '')}\n\n"
-        "Отправляйте слова или фразы по одному сообщению. Когда закончите, нажмите «Готово».",
+        "Отправьте слово или фразу одним сообщением. Фильтр сохранится сразу, после этого можно отправить следующий или вернуться назад.",
         kb.cancel_menu(),
     )
     await callback.answer()
@@ -435,11 +417,16 @@ async def keyword_add_finish(message: Message, state: FSMContext) -> None:
         await state.set_state(KeywordStates.waiting_keyword)
         await message.answer(
             f"Фильтр добавлен: {escape(item.keyword)} — {escape(services.MODE_LABELS.get(item.mode, item.mode))}.\n\n"
-            "Можно отправить следующий фильтр тем же типом или завершить добавление.",
+            "Отправьте следующий фильтр этим же режимом или вернитесь назад.",
             reply_markup=kb.keyword_continue_menu(channel_id),
         )
     except Exception as exc:
-        await message.answer(f"Не удалось добавить фильтр: {escape(services.error_text(exc))}", reply_markup=kb.cancel_menu())
+        text = services.error_text(exc)
+        if not user.is_pro and "PRO" in text:
+            await state.clear()
+            await message.answer(escape(text), reply_markup=kb.pro_menu(False))
+        else:
+            await message.answer(f"Не удалось добавить фильтр: {escape(text)}", reply_markup=kb.cancel_menu())
 
 
 @router.callback_query(F.data.startswith("kw:done:"))
@@ -500,8 +487,7 @@ async def menu_digest(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             "<b>Дайджест</b>\n"
             "AI-дайджест доступен на PRO.\n\n"
-            "Он собирает сообщения за выбранный период, сжимает большой поток новостей и присылает итоговую сводку прямо в чат.\n\n"
-            "PRO: 20 источников и до 20 ключевых слов для каждого источника.",
+            "Он собирает сообщения за выбранный период и присылает итоговую сводку прямо в чат.",
             kb.digest_locked_menu(),
         )
         await callback.answer()
@@ -518,8 +504,7 @@ async def menu_digest(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await safe_edit(
         callback,
-        "<b>Дайджест</b>\n"
-        "Выберите источник, затем сгенерируйте дайджест сейчас или укажите время ежедневной отправки.",
+        await services.get_bot_text("digest"),
         kb.digest_sources_menu(sources),
     )
     await callback.answer()
@@ -583,7 +568,7 @@ async def digest_generate_period(callback: CallbackQuery, state: FSMContext) -> 
     try:
         text = await services.generate_digest(user.telegram_id, hours, [channel_id])
         await callback.message.answer(
-            f"<b>Дайджест за {hours} ч.</b>\n\n{escape(text)}",
+            f"<b>Дайджест за {hours} ч.</b>\n\n{services.digest_to_html(text)}",
         )
         await safe_edit(callback, "Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_source_actions(channel_id))
     except Exception as exc:
@@ -602,7 +587,7 @@ async def digest_toggle_source(callback: CallbackQuery, state: FSMContext) -> No
     if channel_id in selected:
         selected.remove(channel_id)
     elif len(selected) >= services.DIGEST_MAX_SOURCES:
-        await callback.answer(f"Можно выбрать до {services.DIGEST_MAX_SOURCES} источников.", show_alert=True)
+        await callback.answer("Выбрано слишком много источников для одного дайджеста.", show_alert=True)
         return
     else:
         selected.add(channel_id)
@@ -612,7 +597,7 @@ async def digest_toggle_source(callback: CallbackQuery, state: FSMContext) -> No
         callback,
         f"<b>Источники дайджеста</b>\n"
         f"Период: {hours} ч.\n"
-        f"Выберите от 1 до {services.DIGEST_MAX_SOURCES} источников. Сейчас выбрано: {len(selected)}.",
+        f"Выбрано источников: {len(selected)}.",
         kb.digest_source_menu(sources, selected, bool(selected)),
     )
     await callback.answer()
@@ -635,7 +620,7 @@ async def digest_generate_finish(callback: CallbackQuery, state: FSMContext) -> 
     try:
         text = await services.generate_digest(user.telegram_id, hours, channel_ids)
         await callback.message.answer(
-            f"<b>Дайджест за {hours} ч.</b>\n\n{escape(text)}",
+            f"<b>Дайджест за {hours} ч.</b>\n\n{services.digest_to_html(text)}",
         )
         await safe_edit(callback, "Дайджест готов. Сводка отправлена отдельным сообщением ниже.", kb.digest_menu(True))
     except Exception as exc:
@@ -791,7 +776,7 @@ async def pro_buy(callback: CallbackQuery) -> None:
         return
     await callback.message.answer_invoice(
         title="ZR4K PRO на 30 дней",
-        description="Расширенные лимиты и AI-дайджесты.",
+        description="Дополнительные источники, фильтры и AI-дайджесты.",
         payload="pro_subscription_30",
         provider_token="",
         currency="XTR",
@@ -834,6 +819,56 @@ async def menu_admin(callback: CallbackQuery) -> None:
         return
     await safe_edit(callback, "<b>Админ</b>\nВыберите раздел.", kb.admin_menu())
     await callback.answer()
+
+
+@router.callback_query(F.data == "adm:texts")
+async def admin_texts(callback: CallbackQuery) -> None:
+    if not await require_admin(callback):
+        return
+    rows = [
+        [kb.button(title, f"adm:text:{key}", style="primary", icon="settings")]
+        for key, title in services.TEXT_TITLES.items()
+    ]
+    rows.append([kb.button("В админку", "m:admin", icon="admin")])
+    await safe_edit(callback, "<b>Тексты меню</b>\nВыберите текст для редактирования.", kb.keyboard(rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:text:"))
+async def admin_text_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await require_admin(callback):
+        return
+    key = callback.data.split(":", 2)[2]
+    if key not in services.TEXT_TITLES:
+        await callback.answer("Неизвестный текст.", show_alert=True)
+        return
+    await state.set_state(AdminTextStates.waiting_text)
+    await state.update_data(text_key=key)
+    current = await services.get_bot_text(key)
+    title = services.TEXT_TITLES[key]
+    await safe_edit(
+        callback,
+        f"<b>{escape(title)}</b>\n\n"
+        f"Текущий текст:\n<blockquote>{escape(services.clip(current, 1400))}</blockquote>\n\n"
+        "Отправьте новый текст одним сообщением.",
+        kb.cancel_menu(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminTextStates.waiting_text)
+async def admin_text_save(message: Message, state: FSMContext) -> None:
+    user = await require_user_from_message(message)
+    if not user or not services.is_admin(user):
+        return
+    data = await state.get_data()
+    key = str(data.get("text_key") or "")
+    try:
+        await services.set_bot_text(key, message.text or "")
+        await state.clear()
+        await message.answer("Текст сохранен.", reply_markup=kb.admin_menu())
+    except Exception as exc:
+        await message.answer(f"Не удалось сохранить текст: {escape(services.error_text(exc))}", reply_markup=kb.cancel_menu())
 
 
 @router.callback_query(F.data == "adm:stats")
@@ -1132,7 +1167,6 @@ async def configure_bot(bot: Bot) -> None:
             BotCommand(command="start", description="Главное меню"),
             BotCommand(command="cabinet", description="Личный кабинет"),
             BotCommand(command="pro", description="Подписка PRO"),
-            BotCommand(command="help", description="Помощь"),
         ]
     )
 

@@ -15,6 +15,7 @@ from backend.app.database import Base, async_session, engine, ensure_db_exists
 from backend.app.digest import generate_summary
 from backend.app.models import (
     AIUsageStat,
+    BotText,
     CaughtMessage,
     Channel,
     Keyword,
@@ -40,8 +41,9 @@ DIGEST_MAX_OUTPUT_CHARS = 3500
 
 MODE_LABELS = {
     "semantic": "Смысловой",
-    "exact_phrase": "Точная фраза",
-    "exact_word": "Точное слово",
+    "exact": "Точный",
+    "exact_phrase": "Точный",
+    "exact_word": "Точный",
     "exclude": "Исключение",
 }
 
@@ -49,6 +51,41 @@ DAY_PRESETS = {
     "all": ("Каждый день", "ПН,ВТ,СР,ЧТ,ПТ,СБ,ВС"),
     "work": ("Будни", "ПН,ВТ,СР,ЧТ,ПТ"),
     "weekend": ("Выходные", "СБ,ВС"),
+}
+
+TEXT_DEFAULTS = {
+    "main": (
+        "<b>ZR4K</b>\n"
+        "Бот для мониторинга Telegram-каналов в реальном времени и умной ИИ-аналитики.\n\n"
+        "<b>Что вы можете делать:</b>\n"
+        "• Подключать Telegram-каналы как источники.\n"
+        "• Настраивать смысловые, точные и исключающие фильтры.\n"
+        "• Получать найденные совпадения прямо в чат.\n"
+        "• Составлять ручные и автоматические AI-дайджесты.\n\n"
+        "Выберите раздел ниже."
+    ),
+    "faq": (
+        "<b>FAQ</b>\n"
+        "Работа строится от источника к фильтрам.\n\n"
+        "1. Добавьте публичный канал в разделе Источники.\n"
+        "2. Добавьте фильтры для выбранного канала.\n"
+        "3. Совпадения будут приходить сообщениями от бота и сохраняться в этом чате.\n"
+        "4. В разделе Дайджест можно выбрать источник и составить AI-сводку или настроить ежедневную отправку.\n\n"
+        "<b>Режимы фильтров</b>\n"
+        "Смысловой: ищет сообщения по теме и близкому смыслу, даже если точной фразы нет в тексте.\n"
+        "Точный: ищет указанное слово или фразу без смысловых расширений.\n"
+        "Исключение: отсекает сообщения, где найдено указанное слово или фраза."
+    ),
+    "digest": (
+        "<b>Дайджест</b>\n"
+        "Выберите источник, затем укажите, когда хотите получать дайджест, или составьте его вручную."
+    ),
+}
+
+TEXT_TITLES = {
+    "main": "Основное приветствие",
+    "faq": "FAQ",
+    "digest": "Дайджест",
 }
 
 
@@ -77,7 +114,7 @@ def error_text(exc: Exception) -> str:
     if not text:
         return "Операция не выполнена."
     if "Р" in text or "С" in text:
-        return "Операция не выполнена. Проверьте данные, лимиты тарифа или повторите позже."
+        return "Операция не выполнена. Проверьте данные или повторите позже."
     return text
 
 
@@ -125,11 +162,17 @@ def pro_until_text(user: User | None) -> str:
 
 
 def plan_label(user: User | None) -> str:
-    return "PRO" if user and user.is_pro else "Free"
+    return "PRO" if user and user.is_pro else "FREE"
 
 
 def clip_digest(text: str) -> str:
     return clip(text, DIGEST_MAX_OUTPUT_CHARS)
+
+
+def digest_to_html(text: str) -> str:
+    escaped = escape(text)
+    escaped = re.sub(r"^###\s*(.+)$", r"<b>\1</b>", escaped, flags=re.MULTILINE)
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
 
 
 def prepare_digest_messages(messages_texts: list[dict | str]) -> list[dict | str]:
@@ -235,15 +278,53 @@ async def overview(user_id: int) -> dict:
             )
         )
         keywords_count = await db.scalar(select(func.count(Keyword.id)).where(Keyword.user_id == user_id))
-        messages_count = await db.scalar(select(func.count(CaughtMessage.id)).where(CaughtMessage.user_id == user_id))
+        source_rows = await db.execute(
+            select(Channel.title, Channel.username, func.count(Keyword.id))
+            .join(UserChannel, UserChannel.channel_id == Channel.id)
+            .outerjoin(Keyword, and_(Keyword.channel_id == Channel.id, Keyword.user_id == user_id))
+            .where(UserChannel.user_id == user_id, UserChannel.active == True)
+            .group_by(Channel.id, Channel.title, Channel.username)
+            .order_by(Channel.username.asc())
+        )
         return {
             "user": user,
             "sources": sources_count or 0,
             "keywords": keywords_count or 0,
-            "messages": messages_count or 0,
-            "source_limit": source_limit(user),
-            "keyword_limit": keyword_limit(user),
+            "source_details": [
+                {
+                    "title": title or f"@{username}",
+                    "username": username,
+                    "keywords": count or 0,
+                }
+                for title, username, count in source_rows.all()
+            ],
         }
+
+
+async def get_bot_text(key: str) -> str:
+    async with async_session() as db:
+        item = await db.get(BotText, key)
+        if item and item.text.strip():
+            return item.text
+    return TEXT_DEFAULTS.get(key, "")
+
+
+async def set_bot_text(key: str, text: str) -> BotText:
+    if key not in TEXT_DEFAULTS:
+        raise ValueError("Неизвестный текст.")
+    text = text.strip()
+    if not text:
+        raise ValueError("Текст не может быть пустым.")
+    async with async_session() as db:
+        item = await db.get(BotText, key)
+        if not item:
+            item = BotText(key=key, text=text)
+            db.add(item)
+        else:
+            item.text = text
+        await db.commit()
+        await db.refresh(item)
+        return item
 
 
 async def list_sources(user_id: int) -> list[Channel]:
@@ -333,7 +414,7 @@ async def delete_keyword(user_id: int, keyword_id: int) -> bool:
 async def generate_digest(user_id: int, period_hours: int, channel_ids: list[int] | None = None) -> str:
     selected_ids = [int(item) for item in (channel_ids or [])]
     if selected_ids and len(set(selected_ids)) > DIGEST_MAX_SOURCES:
-        raise ValueError(f"За один дайджест можно выбрать до {DIGEST_MAX_SOURCES} источников.")
+        raise ValueError("Выбрано слишком много источников для одного дайджеста.")
 
     async with async_session() as db:
         user = await crud.get_user(db, user_id)
@@ -494,7 +575,7 @@ async def scheduled_digest_tick(bot: Bot) -> None:
                 await session.commit()
             await bot.send_message(
                 user.telegram_id,
-                f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{escape(digest_text)}",
+                f"<b>Ежедневный дайджест</b>\n{escape(channel.title or '@' + channel.username)}\n\n{digest_to_html(digest_text)}",
             )
         except Exception:
             continue

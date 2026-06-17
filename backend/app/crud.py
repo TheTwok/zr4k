@@ -43,7 +43,9 @@ async def add_user_channel(db: AsyncSession, user_id: int, username: str) -> tup
     user_channels = await get_channels_by_user(db, user_id)
     limit = 20 if user.is_pro else 1
     if len(user_channels) >= limit:
-        raise ValueError(f"Достигнут лимит источников для вашего тарифа ({limit} канал(ов)).")
+        if user.is_pro:
+            raise ValueError("Достигнут максимум источников для PRO.")
+        raise ValueError("Для добавления дополнительных источников нужна подписка PRO.")
 
     # 2. Get or create Channel
     stmt = select(Channel).where(Channel.username == username)
@@ -138,7 +140,9 @@ async def add_keyword(db: AsyncSession, user_id: int, channel_id: int, keyword: 
     
     limit = 20 if user.is_pro else 5
     if source_keywords >= limit:
-        raise ValueError(f"Достигнут лимит ключевых слов для этого источника ({limit} слов).")
+        if user.is_pro:
+            raise ValueError("Достигнут максимум ключевых слов для этого источника.")
+        raise ValueError("Для добавления дополнительных ключевых слов нужна подписка PRO.")
 
     # Prevent duplicates
     stmt_dup = select(Keyword).where(
