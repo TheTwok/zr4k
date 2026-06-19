@@ -29,7 +29,17 @@ from backend.app.config import settings
 from backend.parser import start_parser
 from plain_bot import keyboards as kb
 from plain_bot import services
-from plain_bot.states import AdminPromoStates, AdminTextStates, KeywordStates, PromoStates, ScheduleStates, SourceStates
+from plain_bot.states import (
+    AdminBroadcastStates,
+    AdminIconStates,
+    AdminPriceStates,
+    AdminPromoStates,
+    AdminTextStates,
+    KeywordStates,
+    PromoStates,
+    ScheduleStates,
+    SourceStates,
+)
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -91,7 +101,7 @@ async def require_user_from_callback(callback: CallbackQuery) -> services.User |
 
 async def show_main(target: Message | CallbackQuery, user: services.User) -> None:
     text = await services.get_bot_text("main")
-    markup = kb.main_menu(services.is_admin(user))
+    markup = kb.main_menu(services.is_admin(user), await services.get_menu_icons())
     if isinstance(target, CallbackQuery):
         await safe_edit(target, text, markup)
         await target.answer()
@@ -131,6 +141,7 @@ async def show_cabinet(target: Message | CallbackQuery, user: services.User) -> 
 
 
 async def show_pro(target: Message | CallbackQuery, user: services.User) -> None:
+    price = await services.get_subscription_price()
     lines = ["<b>Подписка PRO</b>", f"Статус: {services.plan_label(user)}"]
     if user.is_pro:
         until = services.pro_until_text(user)
@@ -142,7 +153,7 @@ async def show_pro(target: Message | CallbackQuery, user: services.User) -> None
         ]
     )
     text = "\n".join(lines)
-    markup = kb.pro_menu(user.is_pro)
+    markup = kb.pro_menu(user.is_pro, price)
     if isinstance(target, CallbackQuery):
         await safe_edit(target, text, markup)
         await target.answer()
@@ -231,7 +242,7 @@ async def menu_sources(callback: CallbackQuery) -> None:
     sources = await services.list_sources(user.telegram_id)
     lines = ["<b>Источники</b>"]
     if sources:
-        lines.extend(f"{idx}. @{escape(source.username)}" for idx, source in enumerate(sources, start=1))
+        lines.extend(f"{idx}. {escape(services.source_full_title(source))}" for idx, source in enumerate(sources, start=1))
     else:
         lines.append("Пока нет источников.")
     await safe_edit(callback, "\n".join(lines), kb.sources_menu())
@@ -270,7 +281,8 @@ async def source_add_finish(message: Message, state: FSMContext) -> None:
         text = services.error_text(exc)
         if not user.is_pro and "PRO" in text:
             await state.clear()
-            await message.answer(escape(text), reply_markup=kb.pro_menu(False))
+            price = await services.get_subscription_price()
+            await message.answer(escape(text), reply_markup=kb.pro_menu(False, price))
         else:
             await message.answer(f"Не удалось добавить источник: {escape(text)}", reply_markup=kb.cancel_menu())
 
@@ -285,8 +297,8 @@ async def source_delete_menu(callback: CallbackQuery) -> None:
         await safe_edit(callback, "<b>Удаление источника</b>\nНет активных источников.", kb.sources_menu())
         await callback.answer()
         return
-    rows = [[kb.button(f"@{source.username}", f"src:rm:{source.id}", style="danger", icon="source_item")] for source in sources]
-    rows.append([kb.button("Назад", "m:sources", icon="back")])
+    rows = [[kb.button(services.source_title(source), f"src:rm:{source.id}", style="danger")] for source in sources]
+    rows.append([kb.button("Назад", "m:sources")])
     await safe_edit(callback, "<b>Удаление источника</b>\nВыберите источник.", kb.keyboard(rows))
     await callback.answer()
 
@@ -315,19 +327,19 @@ async def menu_filters(callback: CallbackQuery) -> None:
         await safe_edit(
             callback,
             "<b>Фильтры</b>\nСначала добавьте источник.",
-            kb.keyboard([[kb.button("Добавить источник", "src:add", style="success", icon="add")], [kb.button("В главное меню", "m:main", icon="back")]]),
+            kb.keyboard([[kb.button("Добавить источник", "src:add", style="success")], [kb.button("В главное меню", "m:main")]]),
         )
         await callback.answer()
         return
-    rows = [[kb.button(f"@{source.username}", f"flt:c:{source.id}", style="primary", icon="source_item")] for source in sources]
-    rows.append([kb.button("В главное меню", "m:main", icon="back")])
+    rows = [[kb.button(services.source_title(source), f"flt:c:{source.id}", style="primary")] for source in sources]
+    rows.append([kb.button("В главное меню", "m:main")])
     await safe_edit(callback, "<b>Фильтры</b>\nВыберите источник.", kb.keyboard(rows))
     await callback.answer()
 
 
 async def show_channel_filters(callback: CallbackQuery, user_id: int, channel_id: int) -> None:
     channel, keywords = await services.list_keywords(user_id, channel_id)
-    lines = [f"<b>Фильтры: @{escape(channel.username)}</b>"]
+    lines = [f"<b>Фильтры: {escape(services.source_full_title(channel))}</b>"]
     if not keywords:
         lines.append("Фильтров пока нет.")
     else:
@@ -343,9 +355,9 @@ async def show_channel_filters(callback: CallbackQuery, user_id: int, channel_id
             lines.extend(["", f"<b>{escape(services.MODE_LABELS.get(mode, mode))}</b>"])
             lines.extend(f"{idx}. {escape(item.keyword)}" for idx, item in enumerate(items, start=1))
     rows = [
-        [kb.button("Добавить фильтр", f"kw:add:{channel_id}", style="success", icon="add")],
-        [kb.button("Удалить фильтр", f"kw:del:{channel_id}", style="danger", icon="delete")],
-        [kb.button("К источникам", "m:filters", icon="back")],
+        [kb.button("Добавить фильтр", f"kw:add:{channel_id}", style="success")],
+        [kb.button("Удалить фильтр", f"kw:del:{channel_id}", style="danger")],
+        [kb.button("К источникам", "m:filters")],
     ]
     await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
 
@@ -370,10 +382,10 @@ async def keyword_add_mode(callback: CallbackQuery) -> None:
         return
     channel_id = int(callback.data.split(":")[2])
     rows = [
-        [kb.button("Смысловой", f"kw:m:{channel_id}:semantic", style="primary", icon="filters")],
-        [kb.button("Точный", f"kw:m:{channel_id}:exact", style="primary", icon="filters")],
-        [kb.button("Исключение", f"kw:m:{channel_id}:exclude", style="primary", icon="filters")],
-        [kb.button("Назад", f"flt:c:{channel_id}", icon="back")],
+        [kb.button("Смысловой", f"kw:m:{channel_id}:semantic", style="primary")],
+        [kb.button("Точный", f"kw:m:{channel_id}:exact", style="primary")],
+        [kb.button("Исключение", f"kw:m:{channel_id}:exclude", style="primary")],
+        [kb.button("Назад", f"flt:c:{channel_id}")],
     ]
     await safe_edit(
         callback,
@@ -431,7 +443,8 @@ async def keyword_add_finish(message: Message, state: FSMContext) -> None:
         text = services.error_text(exc)
         if not user.is_pro and "PRO" in text:
             await state.clear()
-            await message.answer(escape(text), reply_markup=kb.pro_menu(False))
+            price = await services.get_subscription_price()
+            await message.answer(escape(text), reply_markup=kb.pro_menu(False, price))
         else:
             await message.answer(f"Не удалось добавить фильтр: {escape(text)}", reply_markup=kb.cancel_menu())
 
@@ -460,14 +473,14 @@ async def keyword_delete_menu(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     if not keywords:
-        await safe_edit(callback, "Нет фильтров для удаления.", kb.keyboard([[kb.button("Назад", f"flt:c:{channel_id}", icon="back")]]))
+        await safe_edit(callback, "Нет фильтров для удаления.", kb.keyboard([[kb.button("Назад", f"flt:c:{channel_id}")]]))
         await callback.answer()
         return
     rows = [
-        [kb.button(f"{services.clip(item.keyword, 36)} — {services.MODE_LABELS.get(item.mode, item.mode)}", f"kw:rm:{item.id}:{channel_id}", style="danger", icon="delete")]
+        [kb.button(f"{services.clip(item.keyword, 36)} — {services.MODE_LABELS.get(item.mode, item.mode)}", f"kw:rm:{item.id}:{channel_id}", style="danger")]
         for item in keywords
     ]
-    rows.append([kb.button("Назад", f"flt:c:{channel_id}", icon="back")])
+    rows.append([kb.button("Назад", f"flt:c:{channel_id}")])
     await safe_edit(callback, "<b>Удаление фильтра</b>\nВыберите запись.", kb.keyboard(rows))
     await callback.answer()
 
@@ -479,7 +492,7 @@ async def keyword_delete(callback: CallbackQuery) -> None:
         return
     _, _, keyword_id, channel_id = callback.data.split(":")
     await services.delete_keyword(user.telegram_id, int(keyword_id))
-    await safe_edit(callback, "Фильтр удален.", kb.keyboard([[kb.button("Открыть фильтры", f"flt:c:{channel_id}", style="primary", icon="filters")]]))
+    await safe_edit(callback, "Фильтр удален.", kb.keyboard([[kb.button("Открыть фильтры", f"flt:c:{channel_id}", style="primary")]]))
     await callback.answer()
 
 
@@ -530,7 +543,7 @@ async def digest_source(callback: CallbackQuery) -> None:
         return
     await safe_edit(
         callback,
-        f"<b>AI Дайджест: @{escape(source.username)}</b>\n"
+        f"<b>AI Дайджест: {escape(services.source_full_title(source))}</b>\n"
         f"Расписание: {escape(schedule_label(source.digest_schedule_time, source.digest_schedule_days))}.",
         kb.digest_source_actions(channel_id),
     )
@@ -650,7 +663,7 @@ async def schedule_sources(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
     configured = [
-        f"@{escape(source.username)} — {escape(schedule_label(source.digest_schedule_time, source.digest_schedule_days))}"
+        f"{escape(services.source_full_title(source))} — {escape(schedule_label(source.digest_schedule_time, source.digest_schedule_days))}"
         for source in sources
         if source.digest_schedule_time
     ]
@@ -661,8 +674,8 @@ async def schedule_sources(callback: CallbackQuery, state: FSMContext) -> None:
         "<b>Текущие настройки</b>",
     ]
     lines.extend(configured or ["Пока нет настроенных ежедневных AI Дайджестов."])
-    rows = [[kb.button(f"@{source.username}", f"sch:c:{source.id}", style="primary", icon="source_item")] for source in sources]
-    rows.append([kb.button("Назад", "m:digest", icon="back")])
+    rows = [[kb.button(services.source_title(source), f"sch:c:{source.id}", style="primary")] for source in sources]
+    rows.append([kb.button("Назад", "m:digest")])
     await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
     await callback.answer()
 
@@ -682,12 +695,12 @@ async def schedule_time(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(schedule_channel_id=channel_id)
     rows = []
     if source.digest_schedule_time:
-        rows.append([kb.button("Отключить", f"sch:off:{channel_id}", style="danger", icon="disable")])
-    rows.append([kb.button("Назад", "dig:sched", icon="back")])
+        rows.append([kb.button("Отключить", f"sch:off:{channel_id}", style="danger")])
+    rows.append([kb.button("Назад", "dig:sched")])
     current = schedule_label(source.digest_schedule_time, source.digest_schedule_days)
     await safe_edit(
         callback,
-        f"<b>Ежедневный AI Дайджест: @{escape(source.username)}</b>\n"
+        f"<b>Ежедневный AI Дайджест: {escape(services.source_full_title(source))}</b>\n"
         f"Расписание: {escape(current)}.\n\n"
         "Отправьте сообщением время, когда хотите получать ежедневную рассылку.\n\n"
         "Формат: <code>XX:XX</code>\n"
@@ -712,10 +725,10 @@ async def schedule_time_received(message: Message, state: FSMContext) -> None:
     await state.update_data(schedule_time=value)
     callback_time = value.replace(":", "")
     rows = [
-        [kb.button(label, f"sch:set:{channel_id}:{callback_time}:{preset}", style="success", icon="generate")]
+        [kb.button(label, f"sch:set:{channel_id}:{callback_time}:{preset}", style="success")]
         for preset, (label, _) in services.DAY_PRESETS.items()
     ]
-    rows.append([kb.button("Назад", f"sch:c:{channel_id}", icon="back")])
+    rows.append([kb.button("Назад", f"sch:c:{channel_id}")])
     await message.answer("<b>Ежедневный AI Дайджест</b>\nВыберите дни отправки.", reply_markup=kb.keyboard(rows))
 
 
@@ -771,7 +784,8 @@ async def promo_finish(message: Message, state: FSMContext) -> None:
     try:
         updated = await services.activate_promo(user.telegram_id, message.text or "")
         await state.clear()
-        await message.answer(f"Промокод активирован. PRO до: {services.dt_text(updated.pro_expires_at)}.", reply_markup=kb.pro_menu(True))
+        price = await services.get_subscription_price()
+        await message.answer(f"Промокод активирован. PRO до: {services.dt_text(updated.pro_expires_at)}.", reply_markup=kb.pro_menu(True, price))
     except Exception as exc:
         await message.answer(f"Не удалось активировать промокод: {escape(services.error_text(exc))}", reply_markup=kb.cancel_menu())
 
@@ -781,13 +795,14 @@ async def pro_buy(callback: CallbackQuery) -> None:
     user = await require_user_from_callback(callback)
     if not user:
         return
+    price = await services.get_subscription_price()
     await callback.message.answer_invoice(
         title="ZR4K PRO на 30 дней",
         description="Дополнительные источники, фильтры и AI-дайджесты.",
         payload="pro_subscription_30",
         provider_token="",
         currency="XTR",
-        prices=[LabeledPrice(label="ZR4K PRO", amount=50)],
+        prices=[LabeledPrice(label="ZR4K PRO", amount=price)],
         start_parameter="buy_pro_stars",
     )
     await callback.answer()
@@ -806,7 +821,8 @@ async def payment_success(message: Message) -> None:
     if message.successful_payment.invoice_payload != "pro_subscription_30":
         return
     await services.save_payment(message.from_user.id, message.successful_payment.total_amount)
-    await message.answer("Оплата принята. PRO активирован на 30 дней.", reply_markup=kb.pro_menu(True))
+    price = await services.get_subscription_price()
+    await message.answer("Оплата принята. PRO активирован на 30 дней.", reply_markup=kb.pro_menu(True, price))
 
 
 async def require_admin(callback: CallbackQuery) -> services.User | None:
@@ -819,6 +835,16 @@ async def require_admin(callback: CallbackQuery) -> services.User | None:
     return user
 
 
+def extract_custom_emoji_id(message: Message) -> str | None:
+    entities = list(message.entities or []) + list(message.caption_entities or [])
+    for entity in entities:
+        custom_id = getattr(entity, "custom_emoji_id", None)
+        if custom_id:
+            return str(custom_id)
+    text = (message.text or "").strip()
+    return text if text.isdigit() else None
+
+
 @router.callback_query(F.data == "m:admin")
 async def menu_admin(callback: CallbackQuery) -> None:
     user = await require_admin(callback)
@@ -828,15 +854,166 @@ async def menu_admin(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "adm:settings")
+async def admin_settings(callback: CallbackQuery) -> None:
+    if not await require_admin(callback):
+        return
+    price = await services.get_subscription_price()
+    rows = [
+        [kb.button("Изменить стоимость PRO", "adm:price", style="primary")],
+        [kb.button("Иконки главного меню", "adm:icons", style="primary")],
+        [kb.button("Опубликовать новость", "adm:broadcast", style="primary")],
+        [kb.button("В админку", "m:admin")],
+    ]
+    await safe_edit(callback, f"<b>Настройки</b>\nСтоимость PRO: {price} Stars.", kb.keyboard(rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:price")
+async def admin_price_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await require_admin(callback):
+        return
+    price = await services.get_subscription_price()
+    await state.set_state(AdminPriceStates.waiting_price)
+    await safe_edit(
+        callback,
+        f"<b>Стоимость PRO</b>\nТекущая стоимость: {price} Stars.\n\nОтправьте новую стоимость числом.",
+        kb.cancel_menu(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminPriceStates.waiting_price)
+async def admin_price_save(message: Message, state: FSMContext) -> None:
+    user = await require_user_from_message(message)
+    if not user or not services.is_admin(user):
+        return
+    try:
+        price = int((message.text or "").strip())
+        await services.set_subscription_price(price)
+        await state.clear()
+        await message.answer(f"Стоимость PRO обновлена: {price} Stars.", reply_markup=kb.admin_menu())
+    except Exception as exc:
+        await message.answer(f"Не удалось обновить стоимость: {escape(services.error_text(exc))}", reply_markup=kb.cancel_menu())
+
+
+@router.callback_query(F.data == "adm:icons")
+async def admin_icons(callback: CallbackQuery) -> None:
+    if not await require_admin(callback):
+        return
+    icons = await services.get_menu_icons()
+    lines = ["<b>Иконки главного меню</b>"]
+    rows = []
+    for key, title in services.MENU_ICON_KEYS.items():
+        lines.append(f"{escape(title)}: <code>{escape(icons.get(key, ''))}</code>")
+        rows.append([kb.button(title, f"adm:icon:{key}", style="primary")])
+    rows.append([kb.button("В настройки", "adm:settings")])
+    await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:icon:"))
+async def admin_icon_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await require_admin(callback):
+        return
+    key = callback.data.split(":", 2)[2]
+    if key not in services.MENU_ICON_KEYS:
+        await callback.answer("Неизвестный пункт меню.", show_alert=True)
+        return
+    await state.set_state(AdminIconStates.waiting_icon)
+    await state.update_data(icon_key=key)
+    await safe_edit(
+        callback,
+        f"<b>{escape(services.MENU_ICON_KEYS[key])}</b>\nОтправьте custom emoji или числовой custom_emoji_id.",
+        kb.cancel_menu(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminIconStates.waiting_icon)
+async def admin_icon_save(message: Message, state: FSMContext) -> None:
+    user = await require_user_from_message(message)
+    if not user or not services.is_admin(user):
+        return
+    data = await state.get_data()
+    key = str(data.get("icon_key") or "")
+    custom_emoji_id = extract_custom_emoji_id(message)
+    if not custom_emoji_id:
+        await message.answer("Отправьте custom emoji из пака или числовой custom_emoji_id.", reply_markup=kb.cancel_menu())
+        return
+    try:
+        await services.set_menu_icon(key, custom_emoji_id)
+        await state.clear()
+        await message.answer("Иконка обновлена.", reply_markup=kb.admin_menu())
+    except Exception as exc:
+        await message.answer(f"Не удалось сохранить иконку: {escape(services.error_text(exc))}", reply_markup=kb.cancel_menu())
+
+
+@router.callback_query(F.data == "adm:broadcast")
+async def admin_broadcast_start(callback: CallbackQuery) -> None:
+    if not await require_admin(callback):
+        return
+    rows = [
+        [kb.button("Всем пользователям", "adm:broadcast:all", style="primary")],
+        [kb.button("FREE", "adm:broadcast:free", style="primary"), kb.button("PRO", "adm:broadcast:pro", style="success")],
+        [kb.button("В настройки", "adm:settings")],
+    ]
+    await safe_edit(callback, "<b>Публикация новости</b>\nВыберите аудиторию.", kb.keyboard(rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:broadcast:"))
+async def admin_broadcast_segment(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await require_admin(callback):
+        return
+    segment = callback.data.split(":", 2)[2]
+    if segment not in {"all", "free", "pro"}:
+        await callback.answer("Неизвестная аудитория.", show_alert=True)
+        return
+    await state.set_state(AdminBroadcastStates.waiting_message)
+    await state.update_data(segment=segment)
+    labels = {"all": "всем пользователям", "free": "FREE пользователям", "pro": "PRO пользователям"}
+    await safe_edit(callback, f"<b>Публикация новости</b>\nОтправьте сообщение, которое нужно разослать {labels[segment]}.", kb.cancel_menu())
+    await callback.answer()
+
+
+@router.message(AdminBroadcastStates.waiting_message)
+async def admin_broadcast_send(message: Message, state: FSMContext) -> None:
+    user = await require_user_from_message(message)
+    if not user or not services.is_admin(user):
+        return
+    data = await state.get_data()
+    segment = str(data.get("segment") or "all")
+    try:
+        user_ids = await services.admin_broadcast_users(segment)
+    except Exception as exc:
+        await message.answer(f"Не удалось выбрать аудиторию: {escape(services.error_text(exc))}", reply_markup=kb.admin_menu())
+        await state.clear()
+        return
+
+    sent = 0
+    failed = 0
+    for user_id in user_ids:
+        try:
+            await message.bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.04)
+
+    await state.clear()
+    await message.answer(f"Новость опубликована.\nОтправлено: {sent}\nОшибок: {failed}", reply_markup=kb.admin_menu())
+
+
 @router.callback_query(F.data == "adm:texts")
 async def admin_texts(callback: CallbackQuery) -> None:
     if not await require_admin(callback):
         return
     rows = [
-        [kb.button(title, f"adm:text:{key}", style="primary", icon="settings")]
+        [kb.button(title, f"adm:text:{key}", style="primary")]
         for key, title in services.TEXT_TITLES.items()
     ]
-    rows.append([kb.button("В админку", "m:admin", icon="admin")])
+    rows.append([kb.button("В админку", "m:admin")])
     await safe_edit(callback, "<b>Тексты меню</b>\nВыберите текст для редактирования.", kb.keyboard(rows))
     await callback.answer()
 
@@ -929,19 +1106,18 @@ async def admin_users(callback: CallbackQuery) -> None:
                 f"{'Владелец · ' if services.is_owner(item) else ''}{'PRO · ' if item.is_pro else 'FREE · '}{item.username or item.telegram_id}",
                 f"adm:u:{item.telegram_id}:{segment}:{offset}",
                 style="success" if item.is_pro else "primary",
-                icon="crown" if services.is_owner(item) else "users",
             )
         ]
         for item in users
     ]
     nav = []
     if offset >= 8:
-        nav.append(kb.button("Назад", f"adm:users:{segment}:{max(0, offset - 8)}", icon="back"))
+        nav.append(kb.button("Назад", f"adm:users:{segment}:{max(0, offset - 8)}"))
     if len(users) == 8:
-        nav.append(kb.button("Дальше", f"adm:users:{segment}:{offset + 8}", icon="next"))
+        nav.append(kb.button("Дальше", f"adm:users:{segment}:{offset + 8}"))
     if nav:
         rows.append(nav)
-    rows.append([kb.button("В админку", "m:admin", icon="admin")])
+    rows.append([kb.button("В админку", "m:admin")])
     title = "PRO пользователи" if segment == "pro" else "FREE пользователи"
     await safe_edit(callback, f"<b>{title}</b>", kb.keyboard(rows))
     await callback.answer()
@@ -976,13 +1152,14 @@ async def admin_user_card(callback: CallbackQuery) -> None:
         if not owner:
             rows.extend(
                 [
-                    [kb.button("PRO 30", f"adm:pro:{user_id}:30:{segment}:{offset}", style="success", icon="pro"), kb.button("PRO 90", f"adm:pro:{user_id}:90:{segment}:{offset}", style="success", icon="pro")],
-                    [kb.button("Снять PRO", f"adm:pro:{user_id}:0:{segment}:{offset}", style="danger", icon="delete")],
-                    [kb.button("Бан / разбан", f"adm:ban:{user_id}:{segment}:{offset}", style="danger", icon="cancel")],
+                    [kb.button("PRO 30", f"adm:pro:{user_id}:30:{segment}:{offset}", style="success"), kb.button("PRO 90", f"adm:pro:{user_id}:90:{segment}:{offset}", style="success")],
+                    [kb.button("PRO 180", f"adm:pro:{user_id}:180:{segment}:{offset}", style="success"), kb.button("PRO 365", f"adm:pro:{user_id}:365:{segment}:{offset}", style="success")],
+                    [kb.button("Снять PRO", f"adm:pro:{user_id}:0:{segment}:{offset}", style="danger")],
+                    [kb.button("Бан / разбан", f"adm:ban:{user_id}:{segment}:{offset}", style="danger")],
                 ]
             )
-        rows.append([kb.button("Сбросить cooldown", f"adm:cool:{user_id}:{segment}:{offset}", style="primary", icon="refresh")])
-        rows.append([kb.button("К списку", f"adm:users:{segment}:{offset}", icon="back")])
+        rows.append([kb.button("Сбросить cooldown", f"adm:cool:{user_id}:{segment}:{offset}", style="primary")])
+        rows.append([kb.button("К списку", f"adm:users:{segment}:{offset}")])
         text = "\n".join(lines)
         await safe_edit(callback, text, kb.keyboard(rows))
     except Exception as exc:
@@ -1004,7 +1181,7 @@ async def admin_pro(callback: CallbackQuery) -> None:
         await safe_edit(
             callback,
             f"PRO обновлен. Действует до: {services.dt_text(expires)}.",
-            kb.keyboard([[kb.button("Назад", f"adm:u:{user_id}:{segment}:{offset}", icon="back")]]),
+            kb.keyboard([[kb.button("Назад", f"adm:u:{user_id}:{segment}:{offset}")]]),
         )
     except Exception as exc:
         await callback.answer(services.error_text(exc), show_alert=True)
@@ -1022,7 +1199,7 @@ async def admin_ban(callback: CallbackQuery) -> None:
     try:
         state = await services.admin_toggle_ban(admin.telegram_id, target_id)
         await callback.answer("Статус обновлен.", show_alert=True)
-        await safe_edit(callback, f"Блокировка: {'включена' if state else 'выключена'}.", kb.keyboard([[kb.button("Назад", f"adm:u:{target_id}:{segment}:{offset}", icon="back")]]))
+        await safe_edit(callback, f"Блокировка: {'включена' if state else 'выключена'}.", kb.keyboard([[kb.button("Назад", f"adm:u:{target_id}:{segment}:{offset}")]]))
     except Exception as exc:
         await callback.answer(services.error_text(exc), show_alert=True)
 
@@ -1037,7 +1214,7 @@ async def admin_cooldown(callback: CallbackQuery) -> None:
     offset = int(parts[4]) if len(parts) > 4 else 0
     await services.admin_reset_cooldown(target_id)
     await callback.answer("Cooldown сброшен.", show_alert=True)
-    await safe_edit(callback, "Cooldown ручного AI Дайджеста сброшен.", kb.keyboard([[kb.button("Назад", f"adm:u:{target_id}:{segment}:{offset}", icon="back")]]))
+    await safe_edit(callback, "Cooldown ручного AI Дайджеста сброшен.", kb.keyboard([[kb.button("Назад", f"adm:u:{target_id}:{segment}:{offset}")]]))
 
 
 @router.callback_query(F.data == "adm:promos")
@@ -1051,11 +1228,11 @@ async def admin_promos(callback: CallbackQuery) -> None:
             lines.append(f"{escape(promo.code)} · {promo.duration_days} дн. · {promo.activations_count}/{promo.max_activations}")
     else:
         lines.append("Промокодов нет.")
-    rows = [[kb.button("Создать промокод", "adm:promo_new", style="success", icon="add")]]
+    rows = [[kb.button("Создать промокод", "adm:promo_new", style="success")]]
     for promo in promos[:10]:
         if len(promo.code) <= 40:
-            rows.append([kb.button(f"Удалить {promo.code}", f"adm:promo_del:{promo.code}", style="danger", icon="delete")])
-    rows.append([kb.button("В админку", "m:admin", icon="admin")])
+            rows.append([kb.button(f"Удалить {promo.code}", f"adm:promo_del:{promo.code}", style="danger")])
+    rows.append([kb.button("В админку", "m:admin")])
     await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
     await callback.answer()
 
@@ -1128,7 +1305,7 @@ async def admin_promo_delete(callback: CallbackQuery) -> None:
     if promos:
         for promo in promos[:20]:
             lines.append(f"{escape(promo.code)} · {promo.duration_days} дн. · {promo.activations_count}/{promo.max_activations}")
-    rows = [[kb.button("Создать промокод", "adm:promo_new", style="success", icon="add")], [kb.button("В админку", "m:admin", icon="admin")]]
+    rows = [[kb.button("Создать промокод", "adm:promo_new", style="success")], [kb.button("В админку", "m:admin")]]
     await safe_edit(callback, "\n".join(lines), kb.keyboard(rows))
     await callback.answer()
 
@@ -1170,6 +1347,38 @@ async def scheduler_loop(bot: Bot) -> None:
             await asyncio.sleep(30)
 
 
+async def send_admin_system_notice(bot: Bot, text: str) -> None:
+    if not settings.admin_user_id:
+        return
+    try:
+        await bot.send_message(settings.admin_user_id, f"<b>Системное уведомление</b>\n{text}")
+    except Exception as exc:
+        logger.error("Failed to send admin system notice: %s", exc)
+
+
+async def task_monitor_loop(bot: Bot, monitored_tasks: list[asyncio.Task]) -> None:
+    reported: set[str] = set()
+    while True:
+        try:
+            for task in monitored_tasks:
+                name = task.get_name()
+                if not task.done() or name in reported:
+                    continue
+                reported.add(name)
+                try:
+                    exc = task.exception()
+                except asyncio.CancelledError:
+                    continue
+                details = f": {escape(str(exc))}" if exc else ""
+                await send_admin_system_notice(bot, f"Серверная задача <b>{escape(name)}</b> остановлена{details}.")
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Task monitor error: %s", exc)
+            await asyncio.sleep(30)
+
+
 async def health_server() -> None:
     config = uvicorn.Config(health_app, host="0.0.0.0", port=get_port(), log_level="info")
     server = uvicorn.Server(config)
@@ -1208,10 +1417,15 @@ async def main() -> None:
         asyncio.create_task(scheduler_loop(bot), name="scheduler"),
         asyncio.create_task(health_server(), name="health"),
     ]
+    tasks.append(asyncio.create_task(task_monitor_loop(bot, tasks.copy()), name="task_monitor"))
 
     try:
         logger.info("Starting ZR4K plain bot polling.")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    except Exception as exc:
+        logger.exception("Bot polling stopped with error.")
+        await send_admin_system_notice(bot, f"Бот потерял связь с Telegram polling: {escape(str(exc))}")
+        raise
     finally:
         for task in tasks:
             task.cancel()

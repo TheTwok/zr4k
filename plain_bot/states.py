@@ -25,3 +25,15 @@ class AdminPromoStates(StatesGroup):
 
 class AdminTextStates(StatesGroup):
     waiting_text = State()
+
+
+class AdminPriceStates(StatesGroup):
+    waiting_price = State()
+
+
+class AdminIconStates(StatesGroup):
+    waiting_icon = State()
+
+
+class AdminBroadcastStates(StatesGroup):
+    waiting_message = State()

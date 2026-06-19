@@ -15,6 +15,7 @@ from backend.app.database import Base, async_session, engine, ensure_db_exists
 from backend.app.digest import generate_summary
 from backend.app.models import (
     AIUsageStat,
+    BotSetting,
     BotText,
     CaughtMessage,
     Channel,
@@ -29,14 +30,31 @@ from backend.parser import fetch_history_direct, handle_control_action
 
 
 FREE_SOURCE_LIMIT = 1
-FREE_KEYWORDS_PER_SOURCE = 5
-PRO_SOURCE_LIMIT = 20
-PRO_KEYWORDS_PER_SOURCE = 20
+FREE_KEYWORDS_PER_SOURCE = 10
+PRO_SOURCE_LIMIT = 30
+PRO_KEYWORDS_PER_SOURCE = 30
 DIGEST_MAX_SOURCES = 5
 DIGEST_MAX_MESSAGES_PER_SOURCE = 60
 DIGEST_MAX_MESSAGE_CHARS = 700
 DIGEST_MAX_PAYLOAD_CHARS = 14000
 DIGEST_MAX_OUTPUT_CHARS = 3500
+DEFAULT_SUBSCRIPTION_PRICE_STARS = 50
+
+MENU_ICON_KEYS = {
+    "cabinet": "Личный кабинет",
+    "sources": "Источники",
+    "filters": "Фильтры",
+    "digest": "AI Дайджест",
+    "help": "FAQ",
+}
+
+DEFAULT_MENU_ICONS = {
+    "cabinet": "6032693626394382504",
+    "sources": "5890883384057533697",
+    "filters": "6034969813032374911",
+    "digest": "5956148757899776734",
+    "help": "6028435952299413210",
+}
 
 
 MODE_LABELS = {
@@ -325,6 +343,77 @@ async def set_bot_text(key: str, text: str) -> BotText:
         await db.commit()
         await db.refresh(item)
         return item
+
+
+async def get_setting(key: str, default: str = "") -> str:
+    async with async_session() as db:
+        item = await db.get(BotSetting, key)
+        if item and item.value.strip():
+            return item.value.strip()
+    return default
+
+
+async def set_setting(key: str, value: str) -> BotSetting:
+    value = value.strip()
+    if not value:
+        raise ValueError("Значение не может быть пустым.")
+    async with async_session() as db:
+        item = await db.get(BotSetting, key)
+        if not item:
+            item = BotSetting(key=key, value=value)
+            db.add(item)
+        else:
+            item.value = value
+        await db.commit()
+        await db.refresh(item)
+        return item
+
+
+async def get_subscription_price() -> int:
+    raw = await get_setting("subscription_price_stars", str(DEFAULT_SUBSCRIPTION_PRICE_STARS))
+    try:
+        price = int(raw)
+    except ValueError:
+        return DEFAULT_SUBSCRIPTION_PRICE_STARS
+    return price if price > 0 else DEFAULT_SUBSCRIPTION_PRICE_STARS
+
+
+async def set_subscription_price(price: int) -> None:
+    if price <= 0:
+        raise ValueError("Стоимость должна быть положительным числом.")
+    await set_setting("subscription_price_stars", str(price))
+
+
+async def get_menu_icons() -> dict[str, str]:
+    icons = DEFAULT_MENU_ICONS.copy()
+    async with async_session() as db:
+        rows = await db.execute(select(BotSetting).where(BotSetting.key.like("menu_icon:%")))
+        for item in rows.scalars().all():
+            key = item.key.split(":", 1)[1]
+            if key in MENU_ICON_KEYS and item.value.strip():
+                icons[key] = item.value.strip()
+    return icons
+
+
+async def set_menu_icon(key: str, custom_emoji_id: str) -> None:
+    if key not in MENU_ICON_KEYS:
+        raise ValueError("Неизвестный пункт меню.")
+    custom_emoji_id = custom_emoji_id.strip()
+    if not custom_emoji_id.isdigit():
+        raise ValueError("Отправьте custom emoji или числовой ID.")
+    await set_setting(f"menu_icon:{key}", custom_emoji_id)
+
+
+def source_title(source: Channel) -> str:
+    return source.title or f"@{source.username}"
+
+
+def source_full_title(source: Channel) -> str:
+    title = source_title(source)
+    username = f"@{source.username}"
+    if title == username:
+        return username
+    return f"{title} ({username})"
 
 
 async def list_sources(user_id: int) -> list[Channel]:
@@ -649,6 +738,20 @@ async def admin_users(segment: str, offset: int = 0, limit: int = 8) -> list[Use
         stmt = stmt.limit(limit).offset(offset)
         res = await db.execute(stmt)
         return list(res.scalars().all())
+
+
+async def admin_broadcast_users(segment: str) -> list[int]:
+    async with async_session() as db:
+        now = datetime.utcnow()
+        stmt = select(User.telegram_id).where(User.is_banned == False)
+        if segment == "pro":
+            stmt = stmt.where(or_(User.is_admin == True, User.pro_expires_at > now))
+        elif segment == "free":
+            stmt = stmt.where(User.is_admin == False, or_(User.pro_expires_at.is_(None), User.pro_expires_at <= now))
+        elif segment != "all":
+            raise ValueError("Неизвестная аудитория.")
+        res = await db.execute(stmt)
+        return [int(user_id) for user_id in res.scalars().all()]
 
 
 async def admin_user_details(user_id: int) -> tuple[User, int, int, int]:

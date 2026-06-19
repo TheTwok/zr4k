@@ -41,7 +41,7 @@ async def add_user_channel(db: AsyncSession, user_id: int, username: str) -> tup
 
     # 1. Enforce Source Limits
     user_channels = await get_channels_by_user(db, user_id)
-    limit = 20 if user.is_pro else 1
+    limit = 30 if user.is_pro else 1
     if len(user_channels) >= limit:
         if user.is_pro:
             raise ValueError("Достигнут максимум источников для PRO.")
@@ -138,7 +138,7 @@ async def add_keyword(db: AsyncSession, user_id: int, channel_id: int, keyword: 
     res_count = await db.execute(stmt_count)
     source_keywords = res_count.scalar() or 0
     
-    limit = 20 if user.is_pro else 5
+    limit = 30 if user.is_pro else 10
     if source_keywords >= limit:
         if user.is_pro:
             raise ValueError("Достигнут максимум ключевых слов для этого источника.")

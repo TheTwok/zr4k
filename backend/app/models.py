@@ -170,3 +170,10 @@ class BotText(Base):
     key: Mapped[str] = mapped_column(String(50), primary_key=True)
     text: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+class BotSetting(Base):
+    __tablename__ = "bot_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
